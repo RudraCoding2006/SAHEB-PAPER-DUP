@@ -1,0 +1,976 @@
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { useAuth } from '../auth/AuthContext';
+import { useTranslation } from 'react-i18next';
+import {
+  getRawMaterials,
+  saveRawMaterial,
+  updateRawMaterialStock,
+  getVendors,
+  saveVendor,
+  getRawMaterialLots,
+} from '../../data/index';
+import type { RawMaterialCategory, RawMaterialItem, RawMaterialLot, VendorItem } from '../../data/types';
+import { CustomDatePickerModal } from '../../components/CustomDatePickerModal';
+import { DataFilterBar } from '../../components/DataFilterBar';
+import type { FilterField } from '../../components/DataFilterBar';
+import {
+  Warehouse,
+  Plus,
+  Search,
+  ListFilter,
+  TrendingUp,
+  CheckCircle2,
+  AlertTriangle,
+  Layers,
+  Boxes,
+  ArrowUpRight,
+  Filter,
+  X,
+  Calendar,
+  ChevronDown,
+  Lock,
+  Loader2,
+} from 'lucide-react';
+import { WorkflowStepBadge, WORKFLOW_STEPS } from '../../components/WorkflowStepBadge';
+import { useDateFilter, isDateInTimeframe } from '../../context/DateFilterContext';
+import { useDataSync } from '../../hooks/useDataSync';
+import { MobileToast, type ToastMessage } from '../../components/MobileToast';
+
+const isLiterUnit = (name?: string) => {
+  const n = (name || '').toLowerCase();
+  return n.includes('ro chemical');
+};
+
+export const RawMaterialView: React.FC = () => {
+  const { user, isViewer } = useAuth();
+  const { t } = useTranslation();
+  const { timeframe, selectedDate } = useDateFilter();
+
+  const syncTick = useDataSync(['raw_materials', 'raw_material_stock', 'raw_material_lots', 'vendors']);
+  const [materials, setMaterials] = useState<RawMaterialItem[]>(() => getRawMaterials());
+  const [lots, setLots] = useState<RawMaterialLot[]>(() => getRawMaterialLots());
+  const [vendors, setVendors] = useState<VendorItem[]>(() => getVendors());
+
+  useEffect(() => {
+    setMaterials(getRawMaterials());
+    setLots(getRawMaterialLots());
+    setVendors(getVendors());
+  }, [syncTick]);
+  const [rmSearchQuery, setRmSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+
+  // Inward Lots filter states
+  const [lotSearchQuery, setLotSearchQuery] = useState('');
+  const [lotDateFrom, setLotDateFrom] = useState('');
+  const [lotDateTo, setLotDateTo] = useState('');
+  const [lotVendorFilter, setLotVendorFilter] = useState('all');
+  const [lotMaterialFilter, setLotMaterialFilter] = useState('all');
+
+  // Mobile Toast & Submitting State
+  const [toast, setToast] = useState<ToastMessage | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [highlightedLotNo, setHighlightedLotNo] = useState<string | null>(null);
+
+  // Inward Form States (Select or Type)
+  const [materialInput, setMaterialInput] = useState('');
+  const [selectedMaterialId, setSelectedMaterialId] = useState('');
+  const [newMaterialCategory, setNewMaterialCategory] = useState<RawMaterialCategory>('CHEMICAL');
+  const [isMaterialDropdownOpen, setIsMaterialDropdownOpen] = useState(false);
+
+  const [vendorInput, setVendorInput] = useState('');
+  const [selectedVendorId, setSelectedVendorId] = useState('');
+  const [isVendorDropdownOpen, setIsVendorDropdownOpen] = useState(false);
+
+  const [qtyStr, setQtyStr] = useState('');
+  const [inwardRemarks, setInwardRemarks] = useState('');
+  const [inwardSuccess, setInwardSuccess] = useState('');
+  const [inwardError, setInwardError] = useState('');
+
+  const materialContainerRef = useRef<HTMLDivElement>(null);
+  const vendorContainerRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdowns on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (materialContainerRef.current && !materialContainerRef.current.contains(e.target as Node)) {
+        setIsMaterialDropdownOpen(false);
+      }
+      if (vendorContainerRef.current && !vendorContainerRef.current.contains(e.target as Node)) {
+        setIsVendorDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const activeMaterials = useMemo(() => {
+    return materials.filter(m => m.active !== false);
+  }, [materials]);
+
+  const filteredPickerMaterials = useMemo(() => {
+    const q = materialInput.toLowerCase().trim();
+    if (!q) return activeMaterials;
+    return activeMaterials.filter(m =>
+      m.name.toLowerCase().includes(q) ||
+      m.category.toLowerCase().includes(q)
+    );
+  }, [activeMaterials, materialInput]);
+
+  const activeVendors = useMemo(() => {
+    return vendors.filter(v => v.active !== false);
+  }, [vendors]);
+
+  const filteredPickerVendors = useMemo(() => {
+    const q = vendorInput.toLowerCase().trim();
+    if (!q) return activeVendors;
+    return activeVendors.filter(v =>
+      v.name.toLowerCase().includes(q) ||
+      (v.address && v.address.toLowerCase().includes(q))
+    );
+  }, [activeVendors, vendorInput]);
+
+  // Category filter map
+  const categoryFilterMap: Record<string, RawMaterialCategory | 'ALL'> = {
+    all: 'ALL',
+    waste_paper: 'WASTE_PAPER',
+    other_raw_material: 'OTHER_RAW_MATERIAL',
+    chemical: 'CHEMICAL',
+    boiler: 'BOILER',
+    firewood: 'BOILER',
+    etp: 'ETP',
+  };
+
+  const handleInwardSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSubmitting) return;
+    setInwardError('');
+    setInwardSuccess('');
+
+    if (isViewer) {
+      setToast({
+        type: 'error',
+        title: 'Action Locked',
+        message: 'Viewer Mode: Inward stock addition is locked (Read-Only).',
+      });
+      return;
+    }
+
+    const finalMatName = materialInput.trim();
+    const finalVenName = vendorInput.trim();
+
+    if (!finalMatName || !qtyStr || !finalVenName) {
+      setToast({
+        type: 'warning',
+        title: 'Incomplete Entry',
+        message: 'Please enter or select raw material item, supplier vendor, and enter inward quantity.',
+      });
+      return;
+    }
+
+    const qty = parseFloat(qtyStr);
+    if (isNaN(qty) || qty <= 0) {
+      setToast({
+        type: 'warning',
+        title: 'Invalid Quantity',
+        message: 'Inward quantity must be a positive number.',
+      });
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+
+      // 1. Resolve or create Raw Material
+      let material = materials.find(
+        m => (selectedMaterialId && m.id === selectedMaterialId) || m.name.toLowerCase() === finalMatName.toLowerCase()
+      );
+
+      if (!material) {
+        // Automatically save new raw material
+        const newMat: RawMaterialItem = {
+          id: `rm-${Date.now()}`,
+          name: finalMatName,
+          category: newMaterialCategory,
+          stock: 0,
+          minThreshold: 100,
+          active: true,
+        };
+        material = saveRawMaterial(newMat, user?.displayName || 'Admin');
+      }
+
+      // 2. Resolve or create Vendor
+      let vendor = vendors.find(
+        v => (selectedVendorId && v.id === selectedVendorId) || v.name.toLowerCase() === finalVenName.toLowerCase()
+      );
+
+      if (!vendor) {
+        // Automatically save new supplier vendor
+        const newVendor: VendorItem = {
+          id: `vnd-${Date.now()}`,
+          name: finalVenName,
+          address: 'Direct Inward Supplier',
+          contact: '',
+          active: true,
+        };
+        vendor = saveVendor(newVendor, user?.displayName || 'Admin');
+      }
+
+      const success = updateRawMaterialStock(material.id, qty, user?.displayName || 'System', vendor.name);
+      if (success) {
+        const freshLots = getRawMaterialLots();
+        const freshMaterials = getRawMaterials();
+        const freshVendors = getVendors();
+        setMaterials(freshMaterials);
+        setLots(freshLots);
+        setVendors(freshVendors);
+
+        const newestLot = freshLots[0]?.lotNo || freshLots[freshLots.length - 1]?.lotNo;
+        if (newestLot) {
+          setHighlightedLotNo(newestLot);
+          setTimeout(() => setHighlightedLotNo(null), 4500);
+        }
+
+        setToast({
+          type: 'success',
+          title: 'Inward Stock Logged Successfully',
+          message: `Added ${qty.toLocaleString()} kg of ${material.name} from ${vendor.name}. Stock updated in real-time.`,
+          duration: 3500,
+        });
+
+        // Reset form
+        setMaterialInput('');
+        setSelectedMaterialId('');
+        setVendorInput('');
+        setSelectedVendorId('');
+        setQtyStr('');
+        setInwardRemarks('');
+        setIsMaterialDropdownOpen(false);
+        setIsVendorDropdownOpen(false);
+      } else {
+        setToast({
+          type: 'error',
+          title: 'Stock Update Failed',
+          message: 'An error occurred while updating raw material inventory.',
+        });
+      }
+    } catch (err: any) {
+      setToast({
+        type: 'error',
+        title: 'Stock Update Error',
+        message: err.message || 'Failed to record inward stock entry.',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const filteredMaterials = useMemo(() => {
+    return materials.filter(m => {
+      if (m.active === false) return false;
+      const matchesSearch = m.name.toLowerCase().includes(rmSearchQuery.toLowerCase());
+      const selectedCatEnum = categoryFilterMap[selectedCategory];
+      const matchesCategory =
+        selectedCatEnum === 'ALL' ||
+        m.category === selectedCatEnum ||
+        (selectedCatEnum === 'BOILER' && (m.category === 'BOILER' || (m.category as string) === 'FIREWOOD'));
+      return matchesSearch && matchesCategory;
+    });
+  }, [materials, rmSearchQuery, selectedCategory]);
+
+  // Dynamic KPI Metrics
+  const totalStockKg = useMemo(() => materials.filter(m => m.active !== false).reduce((acc, m) => acc + m.stock, 0), [materials]);
+  const wastePaperStockKg = useMemo(() => materials.filter(m => m.active !== false && m.category === 'WASTE_PAPER').reduce((acc, m) => acc + m.stock, 0), [materials]);
+  const chemicalStockKg = useMemo(() => materials.filter(m => m.active !== false && m.category === 'CHEMICAL').reduce((acc, m) => acc + m.stock, 0), [materials]);
+  const boilerStockKg = useMemo(() => materials.filter(m => m.active !== false && (m.category === 'BOILER' || (m.category as string) === 'FIREWOOD')).reduce((acc, m) => acc + m.stock, 0), [materials]);
+  const etpStockKg = useMemo(() => materials.filter(m => m.active !== false && m.category === 'ETP').reduce((acc, m) => acc + m.stock, 0), [materials]);
+  const otherStockKg = useMemo(() => materials.filter(m => m.active !== false && m.category === 'OTHER_RAW_MATERIAL').reduce((acc, m) => acc + m.stock, 0), [materials]);
+
+  const timeframeLots = useMemo(() => {
+    return lots.filter(l => isDateInTimeframe(l.date, selectedDate, timeframe));
+  }, [lots, selectedDate, timeframe]);
+
+  const timeframeInwardKg = useMemo(() => {
+    return timeframeLots.reduce((sum, l) => sum + (l.weight || 0), 0);
+  }, [timeframeLots]);
+
+  const lowStockCount = useMemo(() => {
+    return materials.filter(m => m.active !== false && m.stock <= m.minThreshold).length;
+  }, [materials]);
+
+  const timeframeLabel = useMemo(() => {
+    if (timeframe === 'day') return `For Day (${selectedDate})`;
+    if (timeframe === 'week') return 'Weekly Inward Window';
+    if (timeframe === 'month') return `Month (${selectedDate.substring(0, 7)})`;
+    return 'All-Time Inward Receipts';
+  }, [timeframe, selectedDate]);
+
+  // Helper for stock status color styling
+  const getStockStatus = (stock: number, min: number) => {
+    if (stock <= min * 0.5) {
+      return {
+        label: 'Critical Low',
+        colorClass: 'text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/60 border-red-300 dark:border-red-800',
+        barColor: 'bg-gradient-to-r from-red-500 to-rose-600',
+        dotClass: 'bg-red-500 animate-pulse',
+      };
+    } else if (stock <= min) {
+      return {
+        label: 'Low Stock',
+        colorClass: 'text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/60 border-amber-300 dark:border-amber-700',
+        barColor: 'bg-gradient-to-r from-amber-500 to-orange-500',
+        dotClass: 'bg-amber-500',
+      };
+    } else {
+      return {
+        label: 'In Stock',
+        colorClass: 'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300 dark:border-emerald-800',
+        barColor: 'bg-gradient-to-r from-emerald-500 to-teal-500',
+        dotClass: 'bg-emerald-500',
+      };
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+
+      {/* Top Row: Total Raw Stock (Left) + Add Purchase Inward Shipment (Right) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 w-full items-stretch">
+
+        {/* 1. LEFT CARD: TOTAL RAW STOCK */}
+        <div className="lg:col-span-4 neumorphic-card p-6 flex flex-col justify-between space-y-4">
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                <Boxes className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                Total Raw Stock
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 text-[10px] font-black uppercase border border-blue-200 dark:border-blue-800">
+                {materials.length} Items
+              </span>
+            </div>
+
+            <div className="mt-4 space-y-1">
+              <p className="text-3xl sm:text-4xl font-black font-mono text-slate-900 dark:text-white tracking-tight">
+                {(totalStockKg / 1000).toLocaleString('en-IN', { maximumFractionDigits: 1 })} <span className="text-lg font-bold text-slate-400">Tons</span>
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                {(totalStockKg).toLocaleString()} kg across {materials.length} items
+              </p>
+            </div>
+          </div>
+
+          {/* Category Breakdown Mini Details */}
+          <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-2">
+            <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
+              Category Breakdown
+            </span>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="bg-slate-50 dark:bg-slate-800/60 rounded-xl p-2.5 border border-slate-100 dark:border-slate-700/60">
+                <div className="text-[10px] text-slate-400 font-medium">Waste Paper</div>
+                <div className="font-mono font-bold text-slate-900 dark:text-white text-sm">
+                  {(wastePaperStockKg / 1000).toFixed(1)} <span className="text-[10px] text-slate-400">T</span>
+                </div>
+              </div>
+              <div className="bg-slate-50 dark:bg-slate-800/60 rounded-xl p-2.5 border border-slate-100 dark:border-slate-700/60">
+                <div className="text-[10px] text-slate-400 font-medium">Chemicals</div>
+                <div className="font-mono font-bold text-slate-900 dark:text-white text-sm">
+                  {(chemicalStockKg / 1000).toFixed(1)} <span className="text-[10px] text-slate-400">T</span>
+                </div>
+              </div>
+              <div className="bg-slate-50 dark:bg-slate-800/60 rounded-xl p-2.5 border border-slate-100 dark:border-slate-700/60">
+                <div className="text-[10px] text-slate-400 font-medium">Boiler</div>
+                <div className="font-mono font-bold text-slate-900 dark:text-white text-sm">
+                  {(boilerStockKg / 1000).toFixed(1)} <span className="text-[10px] text-slate-400">T</span>
+                </div>
+              </div>
+              <div className="bg-slate-50 dark:bg-slate-800/60 rounded-xl p-2.5 border border-slate-100 dark:border-slate-700/60">
+                <div className="text-[10px] text-slate-400 font-medium">ETP</div>
+                <div className="font-mono font-bold text-slate-900 dark:text-white text-sm">
+                  {etpStockKg} <span className="text-[10px] text-slate-400">kg</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 2. RIGHT CARD: ADD PURCHASE INWARD SHIPMENT (Direct Fast Inline Form) */}
+        <div className="lg:col-span-8 neumorphic-card p-6 flex flex-col justify-between space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400">
+                {isViewer ? <Lock className="h-4 w-4 text-amber-500" /> : <Plus className="h-4 w-4" />}
+              </div>
+              <div>
+                <h3 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider font-heading">
+                  Add Purchase Inward Shipment
+                </h3>
+                <p className="text-[11px] text-slate-400 font-medium">
+                  Log incoming truck deliveries &amp; auto-update stock records
+                </p>
+              </div>
+            </div>
+            {isViewer && (
+              <span className="px-2.5 py-1 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 text-[10px] font-black uppercase border border-amber-200 dark:border-amber-800 flex items-center gap-1">
+                <Lock className="h-3 w-3" /> Viewer (Read-Only)
+              </span>
+            )}
+          </div>
+
+          {inwardError && (
+            <div className="p-3 bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 text-xs rounded-xl border border-red-200 dark:border-red-800 font-bold flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span>{inwardError}</span>
+            </div>
+          )}
+
+          {inwardSuccess && (
+            <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs rounded-xl border border-emerald-200 dark:border-emerald-800 font-bold flex items-center gap-2 animate-in fade-in">
+              <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span>{inwardSuccess}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleInwardSubmit} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* RAW MATERIAL ITEM COMBOBOX (SELECT OR TYPE) */}
+              <div className="relative" ref={materialContainerRef}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-[11px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                    RAW MATERIAL ITEM <span className="text-red-500">*</span>
+                  </label>
+                  <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 rounded-full border border-blue-200/50 dark:border-blue-900/50">
+                    Select or Type
+                  </span>
+                </div>
+                <div className="relative flex items-center">
+                  <input
+                    type="text"
+                    value={materialInput}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setMaterialInput(val);
+                      setIsMaterialDropdownOpen(true);
+                      const match = activeMaterials.find(m => m.name.toLowerCase() === val.trim().toLowerCase());
+                      setSelectedMaterialId(match ? match.id : '');
+                    }}
+                    onFocus={() => setIsMaterialDropdownOpen(true)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        setIsMaterialDropdownOpen(false);
+                      }
+                    }}
+                    placeholder="Type or select Raw Material..."
+                    className="w-full py-2.5 pl-3.5 pr-14 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs font-bold text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition shadow-2xs"
+                    required
+                  />
+                  <div className="absolute right-2 flex items-center gap-1">
+                    {materialInput && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMaterialInput('');
+                          setSelectedMaterialId('');
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                        title="Clear"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setIsMaterialDropdownOpen(!isMaterialDropdownOpen)}
+                      className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                      title="Toggle Options"
+                    >
+                      <ChevronDown className={`h-4 w-4 transition-transform ${isMaterialDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Dropdown Options */}
+                {isMaterialDropdownOpen && (
+                  <div className="absolute left-0 right-0 top-full mt-1.5 bg-white dark:bg-[#091124] border border-slate-200 dark:border-slate-700/90 rounded-2xl shadow-2xl z-50 p-2 space-y-1 max-h-64 overflow-y-auto custom-scrollbar animate-in fade-in zoom-in-95 duration-150">
+                    {filteredPickerMaterials.length > 0 ? (
+                      filteredPickerMaterials.map(m => {
+                        const isSelected = m.id === selectedMaterialId || m.name.toLowerCase() === materialInput.trim().toLowerCase();
+                        return (
+                          <button
+                            key={m.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedMaterialId(m.id);
+                              setMaterialInput(m.name);
+                              setIsMaterialDropdownOpen(false);
+                            }}
+                            className={`w-full p-2 rounded-xl text-left flex items-center justify-between gap-2 transition cursor-pointer ${isSelected
+                                ? 'bg-primary text-white font-bold shadow-xs'
+                                : 'hover:bg-slate-100 dark:hover:bg-slate-800/80 text-slate-800 dark:text-slate-200'
+                              }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="text-xs font-bold truncate">{m.name}</span>
+                              <span className={`px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase ${isSelected
+                                  ? 'bg-white/20 text-white'
+                                  : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                                }`}>
+                                {m.category.replace(/_/g, ' ')}
+                              </span>
+                            </div>
+                            <span className={`text-[11px] font-mono shrink-0 font-bold ${isSelected ? 'text-blue-100' : 'text-slate-500'}`}>
+                              {m.stock >= 1000 ? `${(m.stock / 1000).toFixed(1)} Tons` : `${m.stock} kg`}
+                            </span>
+                          </button>
+                        );
+                      })
+                    ) : (
+                      <div className="p-2 text-center text-xs text-slate-400">
+                        No existing raw materials match "{materialInput}".
+                      </div>
+                    )}
+
+                    {/* New Material Custom Creation Pill */}
+                    {materialInput.trim() && !activeMaterials.some(m => m.name.toLowerCase() === materialInput.trim().toLowerCase()) && (
+                      <div className="p-2.5 rounded-xl border border-blue-200 dark:border-blue-800/70 bg-blue-50/70 dark:bg-blue-950/40 space-y-1.5 mt-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-blue-900 dark:text-blue-300">
+                            Custom item: <span className="underline font-black">{materialInput.trim()}</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setIsMaterialDropdownOpen(false)}
+                            className="px-2 py-0.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold cursor-pointer"
+                          >
+                            Use This
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                          <span className="text-[9px] font-black uppercase text-slate-400">Category:</span>
+                          {(['CHEMICAL', 'WASTE_PAPER', 'BOILER', 'ETP'] as RawMaterialCategory[]).map(cat => (
+                            <button
+                              key={cat}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setNewMaterialCategory(cat);
+                              }}
+                              className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase transition cursor-pointer ${newMaterialCategory === cat
+                                  ? 'bg-blue-600 text-white shadow-2xs'
+                                  : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                                }`}
+                            >
+                              {cat === 'BOILER' ? 'Boiler' : cat === 'ETP' ? 'ETP' : cat === 'WASTE_PAPER' ? 'Waste Paper' : 'Chemical'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* SUPPLIER / VENDOR COMBOBOX (SELECT OR TYPE) */}
+              <div className="relative" ref={vendorContainerRef}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-[11px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                    SUPPLIER / VENDOR <span className="text-red-500">*</span>
+                  </label>
+                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-200/50 dark:border-emerald-900/50">
+                    Select or Type
+                  </span>
+                </div>
+                <div className="relative flex items-center">
+                  <input
+                    type="text"
+                    value={vendorInput}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setVendorInput(val);
+                      setIsVendorDropdownOpen(true);
+                      const match = activeVendors.find(v => v.name.toLowerCase() === val.trim().toLowerCase());
+                      setSelectedVendorId(match ? match.id : '');
+                    }}
+                    onFocus={() => setIsVendorDropdownOpen(true)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        setIsVendorDropdownOpen(false);
+                      }
+                    }}
+                    placeholder="Type or select Supplier Vendor..."
+                    className="w-full py-2.5 pl-3.5 pr-14 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs font-bold text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition shadow-2xs"
+                    required
+                  />
+                  <div className="absolute right-2 flex items-center gap-1">
+                    {vendorInput && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVendorInput('');
+                          setSelectedVendorId('');
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                        title="Clear"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setIsVendorDropdownOpen(!isVendorDropdownOpen)}
+                      className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                      title="Toggle Options"
+                    >
+                      <ChevronDown className={`h-4 w-4 transition-transform ${isVendorDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Dropdown Options */}
+                {isVendorDropdownOpen && (
+                  <div className="absolute left-0 right-0 top-full mt-1.5 bg-white dark:bg-[#091124] border border-slate-200 dark:border-slate-700/90 rounded-2xl shadow-2xl z-50 p-2 space-y-1 max-h-64 overflow-y-auto custom-scrollbar animate-in fade-in zoom-in-95 duration-150">
+                    {filteredPickerVendors.length > 0 ? (
+                      filteredPickerVendors.map(v => {
+                        const isSelected = v.id === selectedVendorId || v.name.toLowerCase() === vendorInput.trim().toLowerCase();
+                        return (
+                          <button
+                            key={v.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedVendorId(v.id);
+                              setVendorInput(v.name);
+                              setIsVendorDropdownOpen(false);
+                            }}
+                            className={`w-full p-2.5 rounded-xl text-left flex items-center justify-between gap-2 transition cursor-pointer ${isSelected
+                                ? 'bg-emerald-600 text-white font-bold shadow-xs'
+                                : 'hover:bg-slate-100 dark:hover:bg-slate-800/80 text-slate-800 dark:text-slate-200'
+                              }`}
+                          >
+                            <div className="min-w-0">
+                              <div className="text-xs font-bold truncate leading-tight">{v.name}</div>
+                              {v.address && (
+                                <div className={`text-[10px] truncate ${isSelected ? 'text-emerald-100' : 'text-slate-400'}`}>
+                                  {v.address}
+                                </div>
+                              )}
+                            </div>
+                            <span className={`px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase shrink-0 ${isSelected ? 'bg-white/20 text-white' : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                              }`}>
+                              Vendor
+                            </span>
+                          </button>
+                        );
+                      })
+                    ) : (
+                      <div className="p-2 text-center text-xs text-slate-400">
+                        No existing vendors match "{vendorInput}".
+                      </div>
+                    )}
+
+                    {/* New Vendor Custom Creation Pill */}
+                    {vendorInput.trim() && !activeVendors.some(v => v.name.toLowerCase() === vendorInput.trim().toLowerCase()) && (
+                      <div className="p-2.5 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/40 flex items-center justify-between mt-1">
+                        <span className="text-xs font-bold text-emerald-900 dark:text-emerald-300">
+                          Custom vendor: <span className="underline font-black">{vendorInput.trim()}</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setIsVendorDropdownOpen(false)}
+                          className="px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold transition shadow-2xs cursor-pointer"
+                        >
+                          Use This
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* INWARD QUANTITY */}
+              <div>
+                <label className="block text-[11px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
+                  INWARD QUANTITY (KG)
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  min="0.1"
+                  placeholder="e.g. 5000"
+                  value={qtyStr}
+                  onChange={e => setQtyStr(e.target.value)}
+                  className="w-full py-2.5 px-3.5 bg-slate-50 dark:bg-slate-900 rounded-2xl text-xs font-bold dark:text-white focus:ring-2 focus:ring-primary focus:outline-none font-mono"
+                  required
+                />
+              </div>
+
+              {/* REMARKS / TRUCK INVOICE */}
+              <div>
+                <label className="block text-[11px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
+                  REMARKS / TRUCK INVOICE NO.
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Inv-4092, Truck GJ-05-BY-1234"
+                  value={inwardRemarks}
+                  onChange={e => setInwardRemarks(e.target.value)}
+                  className="w-full py-2.5 px-3.5 bg-slate-50 dark:bg-slate-900 rounded-2xl text-xs font-bold dark:text-white focus:ring-2 focus:ring-primary focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <button
+                type="submit"
+                disabled={isViewer || isSubmitting}
+                title={isViewer ? 'Viewer Mode: Adding inward shipment is locked (Read-Only)' : 'Confirm Inward'}
+                className={`w-full sm:w-auto px-8 py-3 text-xs uppercase tracking-wider flex items-center justify-center gap-2 rounded-2xl font-black transition ${isViewer
+                    ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed border border-slate-300 dark:border-slate-700 shadow-none'
+                    : isSubmitting
+                      ? 'bg-primary/70 text-white cursor-wait opacity-80'
+                      : 'btn-primary-gradient cursor-pointer active:scale-95'
+                  }`}
+              >
+                {isSubmitting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : isViewer ? (
+                  <Lock className="h-4 w-4 text-amber-500" />
+                ) : (
+                  <Plus className="h-4 w-4" />
+                )}
+                <span>
+                  {isSubmitting
+                    ? 'Confirming Inward Stock...'
+                    : isViewer
+                      ? 'Confirm Inward (Locked)'
+                      : 'Confirm Inward'}
+                </span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      {/* Main Stock Table Container */}
+      <div className="neumorphic-card p-6 space-y-5">
+
+        {/* Category Filters Chips & Search Bar */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-4">
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 custom-scrollbar">
+            <span className="text-xs font-bold text-slate-500 dark:text-slate-400 mr-1 flex items-center gap-1 shrink-0">
+              <Filter className="h-3.5 w-3.5" /> Category:
+            </span>
+            {[
+              { id: 'all', label: 'All Items' },
+              { id: 'waste_paper', label: 'Waste Paper' },
+              { id: 'chemical', label: 'Chemicals' },
+              { id: 'boiler', label: 'Boiler' },
+              { id: 'etp', label: 'ETP' },
+            ].map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setSelectedCategory(tab.id)}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${selectedCategory === tab.id
+                    ? 'bg-primary text-white shadow-xs'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="bg-slate-50 dark:bg-slate-900 rounded-2xl p-2 flex items-center gap-2 w-full md:w-64">
+            <Search className="h-4 w-4 text-slate-400 shrink-0" />
+            <input
+              type="text"
+              value={rmSearchQuery}
+              onChange={e => setRmSearchQuery(e.target.value)}
+              placeholder="Search raw material item..."
+              className="bg-transparent border-none text-xs font-semibold focus:outline-none w-full dark:text-white placeholder-slate-400"
+            />
+          </div>
+        </div>
+
+        {/* Stock Items Table */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 uppercase text-[10px] font-black tracking-wider">
+                <th className="py-3 px-3">Material Item</th>
+                <th className="py-3 px-3">Category</th>
+                <th className="py-3 px-3">Available Stock</th>
+                <th className="py-3 px-3">Minimum Stock (kg)</th>
+                <th className="py-3 px-4 text-center whitespace-nowrap">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-semibold">
+              {filteredMaterials.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="py-8 text-center text-xs text-slate-400 font-medium">
+                    No raw material items match your category or search.
+                  </td>
+                </tr>
+              ) : (
+                filteredMaterials.map(item => {
+                  const status = getStockStatus(item.stock, item.minThreshold);
+                  const percentage = Math.min(100, Math.round((item.stock / (item.minThreshold * 2)) * 100));
+
+                  return (
+                    <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition">
+                      <td className="py-3.5 px-3 font-bold text-slate-900 dark:text-white">
+                        {item.name}
+                      </td>
+                      <td className="py-3.5 px-3 whitespace-nowrap">
+                        <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 whitespace-nowrap inline-flex items-center">
+                          {item.category === 'BOILER' || (item.category as string) === 'FIREWOOD'
+                            ? 'Boiler'
+                            : item.category === 'ETP'
+                              ? 'ETP'
+                              : item.category.replace(/_/g, ' ')}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-3 font-mono font-bold text-slate-900 dark:text-white whitespace-nowrap">
+                        {isLiterUnit(item.name)
+                          ? `${item.stock} L`
+                          : item.stock >= 1000
+                            ? `${(item.stock / 1000).toFixed(2)} Tons (${item.stock} kg)`
+                            : `${item.stock} kg`}
+                      </td>
+                      <td className="py-3.5 px-3 font-mono text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                        {item.minThreshold} {isLiterUnit(item.name) ? 'L' : 'kg'}
+                      </td>
+                      <td className="py-3.5 px-4 text-center whitespace-nowrap">
+                        <span className={`inline-flex items-center justify-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wide border whitespace-nowrap shadow-2xs ${status.colorClass}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${status.dotClass || 'bg-current'}`} />
+                          <span>{status.label}</span>
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Recent Inward Lots History Table */}
+      <div className="bg-white dark:bg-surface-dark rounded-3xl p-6 shadow-sm space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+          <h3 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
+            <Layers className="h-4 w-4 text-primary" />
+            Recent Purchase Inward Receipts Log
+          </h3>
+          <div className="flex items-center gap-2">
+            <div className="bg-slate-50 dark:bg-slate-900 rounded-2xl p-2 flex items-center gap-2 w-full md:w-48">
+              <Search className="h-4 w-4 text-slate-400 shrink-0" />
+              <input
+                type="text"
+                value={lotSearchQuery}
+                onChange={e => setLotSearchQuery(e.target.value)}
+                placeholder="Search lot, item..."
+                className="bg-transparent border-none text-xs font-semibold focus:outline-none w-full dark:text-white placeholder-slate-400"
+              />
+            </div>
+            <DataFilterBar
+              dateFrom={lotDateFrom}
+              dateTo={lotDateTo}
+              onDateFromChange={setLotDateFrom}
+              onDateToChange={setLotDateTo}
+              filterFields={[
+                { id: 'vendor', label: 'Vendor', options: vendors.map(v => ({ label: v.name, value: v.name })) },
+                { id: 'material', label: 'Material', options: [...new Set(lots.map(l => l.materialName || ''))].filter(Boolean).map(n => ({ label: n, value: n })) },
+              ]}
+              activeFilters={{ vendor: lotVendorFilter, material: lotMaterialFilter }}
+              onFilterChange={(fieldId, value) => {
+                if (fieldId === 'vendor') setLotVendorFilter(value);
+                if (fieldId === 'material') setLotMaterialFilter(value);
+              }}
+              onClearAll={() => { setLotDateFrom(''); setLotDateTo(''); setLotVendorFilter('all'); setLotMaterialFilter('all'); }}
+            />
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 uppercase text-[10px] font-black tracking-wider">
+                <th className="py-3 px-3">Lot ID</th>
+                <th className="py-3 px-3">Date</th>
+                <th className="py-3 px-3">Item Name</th>
+                <th className="py-3 px-3">Supplier Vendor</th>
+                <th className="py-3 px-3 font-mono">Quantity</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-semibold">
+              {(() => {
+                let filteredLots = lots;
+                if (timeframe && selectedDate) {
+                  filteredLots = filteredLots.filter(l => isDateInTimeframe(l.date, selectedDate, timeframe));
+                }
+                const lq = lotSearchQuery.toLowerCase().trim();
+                if (lq) filteredLots = filteredLots.filter(l => (l.lotNo || '').toLowerCase().includes(lq) || (l.materialName || '').toLowerCase().includes(lq) || (l.vendorName || '').toLowerCase().includes(lq));
+                if (lotDateFrom) filteredLots = filteredLots.filter(l => l.date >= lotDateFrom);
+                if (lotDateTo) filteredLots = filteredLots.filter(l => l.date <= lotDateTo);
+                if (lotVendorFilter && lotVendorFilter !== 'all') filteredLots = filteredLots.filter(l => l.vendorName === lotVendorFilter);
+                if (lotMaterialFilter && lotMaterialFilter !== 'all') filteredLots = filteredLots.filter(l => l.materialName === lotMaterialFilter);
+
+                // Sort Recent > Past (Newest items on top)
+                const sortedLots = [...filteredLots].sort((a, b) => {
+                  const dateCompare = (b.date || '').localeCompare(a.date || '');
+                  if (dateCompare !== 0) return dateCompare;
+                  return (b.lotNo || '').localeCompare(a.lotNo || '');
+                });
+
+                return sortedLots.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="py-6 text-center text-xs text-slate-400 font-medium">
+                      No inward receipt lots match your filters.
+                    </td>
+                  </tr>
+                ) : (
+                  sortedLots.map(lot => {
+                    const item = materials.find(m => m.id === lot.materialId);
+                    const isHighlighted = highlightedLotNo === lot.lotNo;
+                    return (
+                      <tr
+                        key={lot.lotNo}
+                        className={`transition duration-150 ${isHighlighted
+                            ? 'bg-purple-50/90 dark:bg-purple-950/40 ring-2 ring-primary/40'
+                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                          }`}
+                      >
+                        <td className="py-3 px-3 font-mono font-bold text-primary dark:text-blue-400 flex items-center gap-1.5">
+                          <span>{lot.lotNo}</span>
+                          {isHighlighted && (
+                            <span className="px-1.5 py-0.2 rounded bg-primary text-white text-[9px] font-bold uppercase animate-pulse">
+                              ✓ New
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-slate-600 dark:text-slate-300 font-mono">
+                          {lot.date}
+                        </td>
+                        <td className="py-3 px-3 font-bold text-slate-900 dark:text-white">
+                          {lot.materialName || item?.name || 'Raw Material Item'}
+                        </td>
+                        <td className="py-3 px-3 text-slate-600 dark:text-slate-300">
+                          {lot.vendorName}
+                        </td>
+                        <td className="py-3 px-3 font-mono font-bold text-slate-900 dark:text-white">
+                          {lot.weight} kg
+                        </td>
+                      </tr>
+                    );
+                  })
+                );
+              })()}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Mobile Floating Toast */}
+      <MobileToast toast={toast} onClose={() => setToast(null)} />
+    </div>
+  );
+};

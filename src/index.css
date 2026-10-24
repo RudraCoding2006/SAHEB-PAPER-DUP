@@ -1,0 +1,859 @@
+@import "tailwindcss";
+@variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* Neomorphism Primary Palette */
+  --color-primary: #6C4FE0;
+  --color-primary-light: #8B6CEF;
+  --color-primary-dark: #5B3DC9;
+  --color-accent: #7C3AED;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+
+  /* Light Mode Backgrounds - Lavender Gray Neomorphism */
+  --color-bg-light: #F3F2FA;
+  --color-bg-gradient-start: #EEEDF5;
+  --color-bg-gradient-end: #F3F2FA;
+  --color-surface-light: #ffffff;
+  --color-surface-tint: #F3F2FA;
+  --color-border-light: transparent;
+
+  /* Dark Mode Backgrounds - Deep Slate & Midnight Navy */
+  --color-bg-dark: #0b1329;
+  --color-bg-dark-gradient-start: #0f172a;
+  --color-bg-dark-gradient-end: #0b1329;
+  --color-surface-dark: #131d38;
+  --color-surface-dark-elevated: #1e293b;
+  --color-border-dark: #1e293b;
+
+  /* Text Colors - High-contrast charcoal and slate, zero washed-out low-contrast tint */
+  --color-text-light-primary: #0F172A;
+  --color-text-light-secondary: #475569;
+  --color-text-dark-primary: #f8fafc;
+  --color-text-dark-secondary: #94a3b8;
+
+  /* Typography - Clean Modern Sans-Serif Everywhere */
+  --font-sans: "Inter", "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-heading: "Plus Jakarta Sans", "Inter", sans-serif;
+  --font-mono: "Inter", "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  /* Spacing & Sizing (Neomorphism) */
+  --spacing-touch-target: 44px;
+  --radius-card: 20px;
+  --radius-button: 12px;
+  --radius-input: 12px;
+  --shadow-card: 6px 6px 16px rgba(163,163,196,0.15), -6px -6px 16px rgba(255,255,255,0.7);
+  --shadow-card-hover: 8px 8px 20px rgba(163,163,196,0.22), -6px -6px 16px rgba(255,255,255,0.8);
+}
+
+/* ==========================================================================
+   GLOBAL RESPONSIVE & ANTI-HORIZONTAL-OVERFLOW RULES
+   ========================================================================== */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-width: 100%;
+  width: 100%;
+  -webkit-text-size-adjust: 100%;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+
+body {
+  overflow-x: hidden !important;
+  overflow-y: visible !important;
+  max-width: 100%;
+  width: 100%;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  position: relative;
+  -webkit-overflow-scrolling: touch;
+}
+
+#root {
+  overflow: visible !important;
+  max-width: 100%;
+  width: 100%;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Strictly guarantee that ONLY html (the viewport) has a scrollbar, never body or #root */
+body::-webkit-scrollbar,
+#root::-webkit-scrollbar {
+  display: none !important;
+  width: 0px !important;
+  height: 0px !important;
+}
+
+body,
+#root {
+  scrollbar-width: none !important;
+}
+
+/* Modal Scroll Lock & Momentum Scrolling */
+html.modal-scroll-locked,
+body.modal-scroll-locked {
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+
+[data-modal-scroll="true"],
+.modal-scrollable-content {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+/* Prevent flex children and containers from expanding beyond viewport */
+main, aside, header, nav, section, article {
+  min-width: 0;
+}
+
+/* ==========================================================================
+   NEOMORPHISM DESIGN SYSTEM — Core Component Classes
+   Shadow formula: 6px 6px 16px rgba(163,163,196,0.15), -6px -6px 16px rgba(255,255,255,0.7)
+   ========================================================================== */
+
+/* --- Cards / Panels --- */
+.neumorphic-card {
+  background: #FFFFFF;
+  border: none;
+  border-radius: 20px;
+  box-shadow: 6px 6px 16px rgba(163,163,196,0.15), -6px -6px 16px rgba(255,255,255,0.7);
+  transition: all 0.25s ease-in-out;
+}
+
+.dark .neumorphic-card {
+  background: #11192e;
+  border: 1px solid rgba(30,41,59,0.5);
+  box-shadow: 6px 6px 18px rgba(0, 0, 0, 0.45), -4px -4px 14px rgba(255, 255, 255, 0.02);
+}
+
+.neumorphic-card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 8px 8px 20px rgba(163,163,196,0.22), -6px -6px 16px rgba(255,255,255,0.8);
+}
+
+.dark .neumorphic-card-hover:hover {
+  box-shadow: 8px 10px 24px rgba(0, 0, 0, 0.55);
+}
+
+/* --- Inset Neomorphic Inputs --- */
+.neumorphic-input {
+  background: #F3F2FA;
+  border: none;
+  box-shadow: inset 2px 2px 5px rgba(163,163,196,0.2), inset -2px -2px 5px rgba(255,255,255,0.7);
+  border-radius: 12px;
+  transition: all 0.15s ease-in-out;
+}
+
+.dark .neumorphic-input {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  box-shadow: inset 2px 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.neumorphic-input:focus {
+  box-shadow: inset 2px 2px 5px rgba(163,163,196,0.25), inset -2px -2px 5px rgba(255,255,255,0.8) !important;
+  outline: none !important;
+}
+
+/* --- Primary Action Button (Solid, Uniform, Zero Gradients) --- */
+.btn-primary-gradient {
+  background: var(--color-primary, #6C4FE0) !important;
+  color: #FFFFFF !important;
+  font-weight: 700;
+  border: none;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(108, 79, 224, 0.25);
+  transition: all 0.2s ease-in-out;
+}
+
+.btn-primary-gradient:hover {
+  background: var(--color-primary-dark, #5B3DC9) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(108, 79, 224, 0.35);
+}
+
+.btn-primary-gradient:active {
+  transform: translateY(0);
+}
+
+/* --- Icon Chip Container (48px rounded square, tinted bg) --- */
+.neo-icon-chip {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.neo-icon-chip-sm {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   GLOBAL NEOMORPHISM AUTO-UPGRADE SYSTEM
+   Automatically applies neomorphic styling to all cards, inputs, selects,
+   and table rows across every module — no per-file edits required.
+   Shadow: 6px 6px 16px rgba(163,163,196,0.15), -6px -6px 16px rgba(255,255,255,0.7)
+   ========================================================================== */
+
+/* --- Auto-upgrade: All white rounded cards get neomorphic depth --- */
+main div[class*="bg-white"][class*="rounded-2xl"],
+main div[class*="bg-white"][class*="rounded-3xl"],
+main div[class*="bg-white"][class*="rounded-xl"] {
+  box-shadow: 6px 6px 16px rgba(163,163,196,0.15), -6px -6px 16px rgba(255,255,255,0.7);
+  transition: all 0.25s ease-in-out;
+}
+
+.dark main div[class*="bg-white"][class*="rounded-2xl"],
+.dark main div[class*="bg-white"][class*="rounded-3xl"],
+.dark main div[class*="bg-white"][class*="rounded-xl"] {
+  box-shadow: 6px 6px 18px rgba(0, 0, 0, 0.45), -4px -4px 14px rgba(255, 255, 255, 0.02);
+}
+
+/* Catch bg-surface-dark cards in dark mode */
+.dark main div[class*="bg-surface-dark"][class*="rounded-2xl"],
+.dark main div[class*="bg-surface-dark"][class*="rounded-3xl"],
+.dark main div[class*="bg-surface-dark"][class*="rounded-xl"] {
+  background: #11192e !important;
+  border-color: rgba(30,41,59,0.5) !important;
+  box-shadow: 6px 6px 18px rgba(0, 0, 0, 0.45), -4px -4px 14px rgba(255, 255, 255, 0.02) !important;
+}
+
+/* --- Auto-upgrade: All standard inputs/selects → inset neomorphic shadow --- */
+main input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"]):not([type="hidden"]):not([class*="bg-transparent"]):not([class*="border"]),
+main select:not([class*="bg-transparent"]):not([class*="border"]),
+main textarea:not([class*="bg-transparent"]):not([class*="border"]) {
+  background: #F3F2FA;
+  border: none;
+  box-shadow: inset 2px 2px 5px rgba(163,163,196,0.2), inset -2px -2px 5px rgba(255,255,255,0.7);
+  border-radius: 12px;
+  transition: all 0.15s ease-in-out;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.dark main input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"]):not([type="hidden"]):not([class*="bg-transparent"]):not([class*="border"]),
+.dark main select:not([class*="bg-transparent"]):not([class*="border"]),
+.dark main textarea:not([class*="bg-transparent"]):not([class*="border"]) {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  box-shadow: inset 2px 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+/* Ensure transparent inputs inside custom pill containers are never overwritten by global input rules, even on focus */
+main input.bg-transparent,
+main input[class*="bg-transparent"],
+main input.bg-transparent:focus,
+main input[class*="bg-transparent"]:focus,
+.dark main input.bg-transparent:focus,
+.dark main input[class*="bg-transparent"]:focus {
+  background: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+  outline: none !important;
+  border-radius: 0 !important;
+}
+
+/* --- Clean focus on inputs without artificial border rings --- */
+main input:focus,
+main select:focus,
+main textarea:focus {
+  outline: none !important;
+}
+
+main input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"]):not([type="hidden"]):not([class*="bg-transparent"]):focus,
+main select:not([class*="bg-transparent"]):focus,
+main textarea:not([class*="bg-transparent"]):focus {
+  box-shadow: inset 2px 2px 5px rgba(163,163,196,0.25), inset -2px -2px 5px rgba(255,255,255,0.8) !important;
+  outline: none !important;
+}
+
+.dark main input:not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"]):not([type="hidden"]):not([class*="bg-transparent"]):focus,
+.dark main select:not([class*="bg-transparent"]):focus,
+.dark main textarea:not([class*="bg-transparent"]):focus {
+  box-shadow: inset 2px 2px 6px rgba(0, 0, 0, 0.35) !important;
+  outline: none !important;
+}
+
+/* --- Auto-upgrade: Table row hover effect (light purple tint) --- */
+main table tbody tr {
+  transition: background-color 0.15s ease-in-out;
+}
+
+main table tbody tr:hover {
+  background-color: rgba(108, 79, 224, 0.04) !important;
+}
+
+.dark main table tbody tr:hover {
+  background-color: rgba(108, 79, 224, 0.08) !important;
+}
+
+/* --- Auto-upgrade: Card hover lift --- */
+main .neumorphic-card:hover,
+main div[class*="bg-white"][class*="rounded-2xl"]:hover,
+main div[class*="bg-white"][class*="rounded-3xl"]:hover {
+  box-shadow: 8px 8px 20px rgba(163,163,196,0.22), -6px -6px 16px rgba(255,255,255,0.8) !important;
+}
+
+.dark main .neumorphic-card:hover,
+.dark main div[class*="bg-white"][class*="rounded-2xl"]:hover,
+.dark main div[class*="bg-white"][class*="rounded-3xl"]:hover {
+  box-shadow: 8px 10px 24px rgba(0, 0, 0, 0.55) !important;
+}
+
+/* --- Exclude printable elements from neomorphic shadows --- */
+#printable-receipt-modal *,
+#printable-label-card *,
+#printable-reel-label *,
+.printable-qr-card *,
+[id^="printable-"] * {
+  box-shadow: none !important;
+}
+
+/* Ensure clean, modern typography across all text, figures, codes, and dates — eliminate typewriter monospace everywhere */
+.font-mono, [class*="font-mono"], code, pre, kbd, samp {
+  font-family: "Inter", "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  font-feature-settings: "tnum" 1;
+}
+
+html, body, #root {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  background-color: #F3F2FA;
+}
+
+html.dark, html.dark body, .dark #root {
+  background-color: #0b1329;
+}
+
+/* Remove native number input up/down count spinner arrows globally across the app */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none !important;
+  margin: 0 !important;
+}
+input[type="number"] {
+  -moz-appearance: textfield !important;
+}
+
+/* Remove click/focus outlines, rings, and borders from all Recharts elements */
+.recharts-wrapper,
+.recharts-wrapper *,
+.recharts-surface,
+.recharts-layer,
+.recharts-responsive-container,
+.recharts-cartesian-grid,
+.recharts-tooltip-wrapper,
+.recharts-dot,
+.recharts-active-dot {
+  outline: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+}
+
+/* Silky smooth butter-like glide animation for Recharts tooltip hover popup */
+.recharts-tooltip-wrapper {
+  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1), opacity 150ms ease-out !important;
+  will-change: transform, opacity;
+  pointer-events: none !important;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield !important;
+  appearance: textfield !important;
+}
+
+/* Global Custom Scrollbars matching Dashboard Theme */
+::-webkit-scrollbar-button,
+::-webkit-scrollbar-button:single-button,
+::-webkit-scrollbar-button:single-button:vertical:decrement,
+::-webkit-scrollbar-button:single-button:vertical:increment,
+::-webkit-scrollbar-button:single-button:horizontal:decrement,
+::-webkit-scrollbar-button:single-button:horizontal:increment,
+::-webkit-scrollbar-button:start,
+::-webkit-scrollbar-button:end,
+::-webkit-scrollbar-button:vertical:start:decrement,
+::-webkit-scrollbar-button:vertical:end:increment,
+::-webkit-scrollbar-button:horizontal:start:decrement,
+::-webkit-scrollbar-button:horizontal:end:increment,
+*::-webkit-scrollbar-button,
+*::-webkit-scrollbar-button:single-button,
+*::-webkit-scrollbar-button:vertical:decrement,
+*::-webkit-scrollbar-button:vertical:increment,
+.dashboard-main-scrollbar::-webkit-scrollbar-button,
+.dashboard-main-scrollbar::-webkit-scrollbar-button:single-button,
+.dashboard-main-scrollbar::-webkit-scrollbar-button:vertical:decrement,
+.dashboard-main-scrollbar::-webkit-scrollbar-button:vertical:increment,
+.dashboard-custom-scrollbar::-webkit-scrollbar-button,
+.dashboard-custom-scrollbar::-webkit-scrollbar-button:single-button,
+.dashboard-custom-scrollbar::-webkit-scrollbar-button:vertical:decrement,
+.dashboard-custom-scrollbar::-webkit-scrollbar-button:vertical:increment {
+  display: none !important;
+  width: 0px !important;
+  height: 0px !important;
+  background: transparent !important;
+  border: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Unified Clean Modern Scrollbars across App */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dark ::-webkit-scrollbar-track,
+html.dark ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+  border: 1.5px solid transparent;
+  background-clip: padding-box;
+}
+
+.dark ::-webkit-scrollbar-thumb,
+html.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
+  border: 1.5px solid transparent;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Firefox standard scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+.dark * {
+  scrollbar-color: #334155 transparent;
+}
+
+/* Hide scrollbars completely & enforce blue background for login page */
+html.login-active,
+body.login-active,
+#root:has(.login-page-container) {
+  background: linear-gradient(135deg, #0b1329 0%, #1e293b 100%) !important;
+  min-height: 100vh !important;
+  min-height: 100dvh !important;
+  height: 100% !important;
+  overflow: hidden !important;
+  -ms-overflow-style: none !important; /* IE and Edge */
+  scrollbar-width: none !important; /* Firefox */
+}
+
+.custom-scrollbar,
+.no-scrollbar,
+.login-page-container,
+.login-page-container * {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+}
+
+html.login-active::-webkit-scrollbar,
+body.login-active::-webkit-scrollbar,
+.custom-scrollbar::-webkit-scrollbar,
+.no-scrollbar::-webkit-scrollbar,
+.login-page-container::-webkit-scrollbar,
+.login-page-container *::-webkit-scrollbar {
+  display: none !important; /* Chrome, Safari, Opera */
+  width: 0px !important;
+  height: 0px !important;
+  background: transparent !important;
+}
+
+/* Subtle inner table scrollbar */
+.dashboard-custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.dashboard-custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+.dark .dashboard-custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+
+
+/* Direct print containers: Completely hidden from normal screen display */
+#saheb-lab-print-container,
+#saheb-receipt-print-container,
+#saheb-silent-print-frame {
+  display: none !important;
+  visibility: hidden !important;
+  width: 0 !important;
+  height: 0 !important;
+  position: absolute !important;
+  left: -9999px !important;
+  top: -9999px !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* ==========================================================================
+   PRINT LAYOUT & STYLES (Challan Receipts, Reports, QR Labels, Mobile & Desktop)
+   ========================================================================== */
+@media print {
+  @page {
+    margin: 8mm 8mm;
+    size: A4 portrait;
+  }
+
+  /* Reset main layouts & backgrounds */
+  html, body {
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    min-height: auto !important;
+    height: auto !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  #root, main {
+    height: auto !important;
+    min-height: auto !important;
+    overflow: visible !important;
+    position: static !important;
+    transform: none !important;
+    zoom: 1 !important;
+    background: transparent !important;
+  }
+
+  /* When printing portal outputs (Challan receipt, Reports, QR label, Label Studio batch, Lab Report), hide #root */
+  body.printing-challan #root,
+  body.printing-report #root,
+  body.printing-reel-label #root,
+  body.printing-qr-batch #root,
+  body.print-thermal-labels #root,
+  body.print-a4-labels #root,
+  body.printing-label-studio #root,
+  body.printing-lab-report #root {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    overflow: hidden !important;
+  }
+
+  /* Reset fixed modal overlays and backdrops during print so they never clip or darken pages */
+  .fixed.inset-0,
+  [class*="fixed inset-0"],
+  [class*="backdrop-blur"] {
+    position: static !important;
+    background: transparent !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    height: auto !important;
+    min-height: auto !important;
+    max-height: none !important;
+    inset: auto !important;
+    z-index: auto !important;
+  }
+
+  /* Hide UI navigation, sidebar, headers, footers, mobile bottom bars, and interactive buttons */
+  header,
+  aside,
+  footer,
+  nav,
+  button:not(.print-keep),
+  input,
+  select,
+  textarea,
+  .cursor-pointer,
+  .print-hidden,
+  .print\:hidden,
+  [role="navigation"] {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: hidden !important;
+  }
+
+  /* 1. Official Dispatch Receipt, Stock Statement, Reel Labels, Mill Report, Lab Report & Direct Print Containers */
+  #printable-receipt-modal,
+  #printable-stock-statement-modal,
+  #printable-reel-label-modal,
+  #printable-qr-modal,
+  #printable-mill-report,
+  #printable-lab-modal,
+  #saheb-lab-print-container,
+  #saheb-receipt-print-container {
+    position: static !important;
+    display: block !important;
+    visibility: visible !important;
+    left: auto !important;
+    top: auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
+    border: none !important;
+    overflow: visible !important;
+    z-index: auto !important;
+  }
+
+  #printable-receipt-modal *,
+  #printable-stock-statement-modal *,
+  #printable-reel-label-modal *,
+  #printable-qr-modal *,
+  #printable-mill-report *,
+  #printable-lab-modal *,
+  #saheb-lab-print-container *,
+  #saheb-receipt-print-container * {
+    visibility: visible !important;
+  }
+
+  #printable-receipt-modal .print\:hidden,
+  #printable-receipt-modal button,
+  #printable-stock-statement-modal .print\:hidden,
+  #printable-stock-statement-modal button,
+  #printable-reel-label-modal .print\:hidden,
+  #printable-reel-label-modal button,
+  #printable-qr-modal .print\:hidden,
+  #printable-qr-modal button,
+  #printable-mill-report .print\:hidden,
+  #printable-mill-report button,
+  #printable-lab-modal .print\:hidden,
+  #printable-lab-modal button {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  #printable-receipt-modal > div,
+  #printable-stock-statement-modal > div,
+  #printable-reel-label-modal > div,
+  #printable-qr-modal > div,
+  #printable-mill-report > div {
+    max-width: 100% !important;
+    width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: transparent !important;
+  }
+
+  .print-page-break {
+    page-break-after: always !important;
+    break-after: page !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: space-between !important;
+    min-height: 265mm !important;
+    height: auto !important;
+    max-height: none !important;
+    width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    box-sizing: border-box !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  .print-page-break:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+
+  /* 2. Sticker & QR Label Printing Elements */
+  #printable-label-card,
+  #printable-label-card *,
+  #printable-reel-label,
+  #printable-reel-label *,
+  #printable-label-studio-output,
+  #printable-label-studio-output *,
+  .printable-qr-slip,
+  .printable-qr-slip *,
+  .printable-qr-card,
+  .printable-qr-card * {
+    visibility: visible !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  #printable-reel-label {
+    display: block !important;
+    visibility: visible !important;
+    position: static !important;
+    margin: 0 auto !important;
+    padding: 12px !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+  }
+
+  #printable-label-studio-output {
+    display: block !important;
+    visibility: visible !important;
+    position: static !important;
+    left: auto !important;
+    top: auto !important;
+    width: 100% !important;
+    max-width: 185mm !important;
+    margin: 0 auto !important;
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+    overflow: visible !important;
+    z-index: auto !important;
+  }
+
+  /* 3. Thermal / TSC Label Printing (Single Continuous Roll) */
+  body.print-thermal-labels #printable-qr-labels {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+  }
+
+  body.print-thermal-labels .qr-label-card {
+    width: 100% !important;
+    height: auto !important;
+    min-height: 98% !important;
+    page-break-after: always !important;
+    break-after: page !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    border: none !important;
+    background: white !important;
+    padding: 12px !important;
+    margin: 0 !important;
+    box-sizing: border-box !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: center !important;
+    align-items: center !important;
+  }
+
+  body.print-thermal-labels .qr-label-card:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+
+  /* 4. Standard A4 Grid Printing */
+  body.print-a4-labels #printable-qr-labels {
+    display: grid !important;
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 20px !important;
+    padding: 10mm !important;
+  }
+
+  body.print-a4-labels .qr-label-card {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    border: 1px solid #000 !important;
+    padding: 15px !important;
+    background: white !important;
+    border-radius: 4px !important;
+  }
+}
+
+/* Hide scrollbar for Chrome, Safari, Opera, Edge, Firefox */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Completely Lock and Make Login View 100% Static */
+html.login-active,
+body.login-active {
+  overflow: hidden !important;
+  height: 100% !important;
+  width: 100% !important;
+  position: fixed !important;
+  inset: 0 !important;
+  touch-action: none !important;
+  overscroll-behavior: none !important;
+}
+
+.login-page-container {
+  overflow: hidden !important;
+  touch-action: none !important;
+  overscroll-behavior: none !important;
+  user-select: none !important;
+}
+
+/* --- Global Custom Dropdown / Select Option Styling --- */
+select option {
+  background-color: #ffffff;
+  color: #1e1b2e;
+  font-weight: 600;
+  padding: 8px 12px;
+}
+
+.dark select option {
+  background-color: #0d1527;
+  color: #f8fafc;
+  font-weight: 600;
+}
+
+/* Hide floating mobile bottom navigation & gradient mask when any modal is open (modal-scroll-locked) */
+body.modal-scroll-locked .mobile-bottom-nav,
+body.modal-scroll-locked .mobile-bottom-mask {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+
+

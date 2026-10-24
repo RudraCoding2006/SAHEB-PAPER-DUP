@@ -1,0 +1,3211 @@
+import type {
+  User,
+  RawMaterialItem,
+  ProductItem,
+  PartyItem,
+  VendorItem,
+  VehicleItem,
+  PulpFormula,
+  MachineRoll,
+  Reel,
+  TransactionLog,
+  UserRole,
+  CustomRole,
+  BoilerLog,
+  EtpLog,
+  ElectricityLog,
+  PendingOrder,
+  PackingSlip,
+  StoreItem,
+  StoreActivityLog,
+  RawMaterialLot,
+  PaperTestReport,
+} from './types';
+export type { CustomRole };
+
+import { sortUsersByHierarchy, ROLE_LABELS, getDefaultModulesForRoles } from './types';
+import { hashPinSync, isPinHashed, revealPin } from '../lib/security';
+import {
+  pushUpsertToCloud,
+  pushDeleteToCloud,
+  pushClearTableToCloud,
+  userToDb,
+  rawMaterialToDb,
+  rawMaterialLotToDb,
+  productToDb,
+  partyToDb,
+  vendorToDb,
+  vehicleToDb,
+  formulaToDb,
+  machineRollToDb,
+  reelToDb,
+  logToDb,
+  boilerLogToDb,
+  etpLogToDb,
+  electricityLogToDb,
+  pendingOrderToDb,
+  packingSlipToDb,
+  storeItemToDb,
+  labReportToDb,
+  customRoleToDb,
+  initSupabaseSync,
+  notifyDataUpdated,
+} from '../lib/supabaseSync';
+
+export { initSupabaseSync, notifyDataUpdated };
+
+// Simple JSON storage helper
+export const getJSON = <T>(key: string, fallback: T): T => {
+  try {
+    const item = localStorage.getItem(key);
+    return item ? JSON.parse(item) : fallback;
+  } catch (e) {
+    console.error(`Error reading ${key} from localStorage:`, e);
+    return fallback;
+  }
+};
+
+export const setJSON = <T>(key: string, value: T, notify = true): void => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    if (notify && typeof window !== 'undefined') {
+      notifyDataUpdated(key);
+      window.dispatchEvent(new Event('storage'));
+    }
+  } catch (e) {
+    console.error(`Error saving ${key} to localStorage:`, e);
+  }
+};
+
+// LocalStorage Keys
+export const KEYS = {
+  USERS: 'saheb_users',
+  RAW_MATERIALS: 'saheb_raw_materials',
+  PRODUCTS: 'saheb_products',
+  PARTIES: 'saheb_parties',
+  VENDORS: 'saheb_vendors',
+  VEHICLES: 'saheb_vehicles',
+  FORMULAS: 'saheb_formulas',
+  ROLLS: 'saheb_rolls',
+  REELS: 'saheb_reels',
+  LOGS: 'saheb_logs',
+  BOILER_LOGS: 'saheb_boiler_logs',
+  ETP_LOGS: 'saheb_etp_logs',
+  ELECTRICITY_LOGS: 'saheb_electricity_logs',
+  PENDING_ORDERS: 'saheb_pending_orders',
+  PACKING_SLIPS: 'saheb_packing_slips',
+  STORE_ITEMS: 'saheb_store_items',
+  STORE_LOGS: 'saheb_store_logs',
+  RAW_MATERIAL_LOTS: 'saheb_raw_material_lots',
+  LAB_REPORTS: 'saheb_lab_reports',
+  CUSTOM_ROLES: 'saheb_custom_roles',
+  DELETED_ROLES: 'saheb_deleted_roles',
+};
+
+// 1. Initial Seeds with Plain 4-Digit PINs
+const DEFAULT_USERS: User[] = [
+  {
+    username: 'admin',
+    role: 'Admin',
+    roles: ['Admin'],
+    pin: '1234',
+    displayName: 'Saheb Paper Admin',
+    email: 'sahebpaper@gmail.com',
+    phone: '8000563666',
+    securityQuestion: 'What is your favorite color?',
+    securityAnswer: 'blue',
+    empId: 'EMP-001',
+    designation: 'Admin / Owner',
+    customModules: [
+      'dashboard', 'raw_material_stock', 'pulp_mill_operations', 'machine_production', 'rewinding_reel_conversion', 'lab',
+      'boiler', 'etp', 'electricity', 'orders', 'finished_stock_dispatch', 'dispatch', 'spareparts_management', 'label_studio', 'monthly_yearly_reporting'
+    ]
+  },
+  {
+    username: 'pulper',
+    role: 'PulpOperator',
+    roles: ['PulpOperator'],
+    pin: '1122',
+    displayName: 'Pulper Operator',
+    email: 'pulper@sahebpaper.com',
+    phone: '9876543220',
+    securityQuestion: 'What is your favorite color?',
+    securityAnswer: 'blue',
+    empId: 'EMP-002',
+    designation: 'Pulper (Pulp Mill Operator)',
+    customModules: ['dashboard', 'raw_material_stock', 'pulp_mill_operations', 'boiler', 'etp']
+  },
+  {
+    username: 'plant_manager',
+    role: 'PlantManager',
+    roles: ['PlantManager'],
+    pin: '1234',
+    displayName: 'Plant Manager',
+    email: 'plantmanager@sahebpaper.com',
+    phone: '9876543219',
+    securityQuestion: 'What is your favorite color?',
+    securityAnswer: 'blue',
+    empId: 'EMP-003',
+    designation: 'Plant Manager (Operations)',
+    customModules: ['dashboard', 'lab', 'raw_material_stock', 'pulp_mill_operations', 'machine_production', 'rewinding_reel_conversion', 'boiler', 'etp', 'electricity', 'dispatch', 'finished_stock_dispatch']
+  },
+  {
+    username: 'dispatcher',
+    role: 'Dispatcher',
+    roles: ['Dispatcher'],
+    pin: '1234',
+    displayName: 'Dispatcher',
+    email: 'dispatch@sahebpaper.com',
+    phone: '9876543222',
+    securityQuestion: 'What is your favorite color?',
+    securityAnswer: 'blue',
+    empId: 'EMP-004',
+    designation: 'Dispatcher',
+    customModules: ['dashboard', 'orders', 'finished_stock_dispatch', 'dispatch']
+  },
+  {
+    username: 'shop',
+    role: 'Shopper',
+    roles: ['Shopper'],
+    pin: '1234',
+    displayName: 'Shop / Procurement',
+    email: 'shop@sahebpaper.com',
+    phone: '9876543221',
+    securityQuestion: 'What is your favorite color?',
+    securityAnswer: 'blue',
+    empId: 'EMP-005',
+    designation: 'Shop & Procurement Incharge',
+    customModules: ['dashboard', 'spareparts_management']
+  },
+  {
+    username: 'viewer',
+    role: 'Viewer',
+    roles: ['Viewer'],
+    pin: '1234',
+    displayName: 'Viewer',
+    email: 'viewer@sahebpaper.com',
+    phone: '9876543223',
+    securityQuestion: 'What is your favorite color?',
+    securityAnswer: 'blue',
+    empId: 'EMP-006',
+    designation: 'Read-Only Viewer',
+    customModules: [
+      'dashboard', 'raw_material_stock', 'pulp_mill_operations', 'machine_production', 'rewinding_reel_conversion',
+      'boiler', 'etp', 'electricity', 'orders', 'finished_stock_dispatch', 'dispatch', 'spareparts_management', 'label_studio', 'monthly_yearly_reporting'
+    ]
+  },
+];
+
+export const DEFAULT_RAW_MATERIALS: RawMaterialItem[] = [
+  // Waste Paper & Pulp Raw Materials
+  { id: 'rm-1', name: 'Indian Tissue Waste', category: 'WASTE_PAPER', stock: 0, minThreshold: 1000, usedInModule: 'PULP_MILL' },
+  { id: 'rm-2', name: 'Imported Tissue Waste', category: 'WASTE_PAPER', stock: 0, minThreshold: 1000, usedInModule: 'PULP_MILL' },
+  { id: 'rm-3', name: 'SMK', category: 'WASTE_PAPER', stock: 0, minThreshold: 500, usedInModule: 'PULP_MILL' },
+  { id: 'rm-4', name: 'Cupstock', category: 'WASTE_PAPER', stock: 0, minThreshold: 500, usedInModule: 'PULP_MILL' },
+  { id: 'rm-5', name: 'Pulp Sheet', category: 'WASTE_PAPER', stock: 0, minThreshold: 1000, usedInModule: 'PULP_MILL' },
+  { id: 'rm-7', name: 'Broke', category: 'WASTE_PAPER', stock: 0, minThreshold: 500, usedInModule: 'PULP_MILL' },
+  // Chemical
+  { id: 'rm-8', name: 'DSR', category: 'CHEMICAL', stock: 0, minThreshold: 200, usedInModule: 'MACHINE_PRODUCTION' },
+  { id: 'rm-9', name: 'WSR', category: 'CHEMICAL', stock: 0, minThreshold: 200, usedInModule: 'MACHINE_PRODUCTION' },
+  { id: 'rm-10', name: 'Hydrogen Peroxide', category: 'CHEMICAL', stock: 0, minThreshold: 100, usedInModule: 'PULP_MILL' },
+  { id: 'rm-11', name: 'Hypo', category: 'CHEMICAL', stock: 0, minThreshold: 100, usedInModule: 'PULP_MILL' },
+  { id: 'rm-12', name: 'Bleaching Powder', category: 'CHEMICAL', stock: 0, minThreshold: 100, usedInModule: 'PULP_MILL' },
+  { id: 'rm-13', name: 'Caustic', category: 'CHEMICAL', stock: 0, minThreshold: 100, usedInModule: 'PULP_MILL' },
+  { id: 'rm-14', name: 'OBA', category: 'CHEMICAL', stock: 0, minThreshold: 50, usedInModule: 'MACHINE_PRODUCTION' },
+  { id: 'rm-15', name: 'M Violet', category: 'CHEMICAL', stock: 0, minThreshold: 10, usedInModule: 'MACHINE_PRODUCTION' },
+  { id: 'rm-16', name: 'Washing Powder', category: 'CHEMICAL', stock: 0, minThreshold: 50, usedInModule: 'PULP_MILL' },
+  { id: 'rm-17', name: 'Deformer', category: 'CHEMICAL', stock: 0, minThreshold: 50, usedInModule: 'MACHINE_PRODUCTION' },
+  { id: 'rm-18', name: 'PEO', category: 'CHEMICAL', stock: 0, minThreshold: 50, usedInModule: 'MACHINE_PRODUCTION' },
+  { id: 'rm-19', name: 'HCL', category: 'CHEMICAL', stock: 0, minThreshold: 100, usedInModule: 'UTILITIES_ETP' },
+  { id: 'rm-20', name: 'MG Release', category: 'CHEMICAL', stock: 0, minThreshold: 50, usedInModule: 'MACHINE_PRODUCTION' },
+  { id: 'rm-21', name: 'MG Coating', category: 'CHEMICAL', stock: 0, minThreshold: 50, usedInModule: 'MACHINE_PRODUCTION' },
+  // Boiler Materials & Chemicals
+  { id: 'rm-22', name: 'RO Chemical', category: 'BOILER', stock: 0, minThreshold: 50, usedInModule: 'BOILER' },
+  { id: 'rm-23', name: 'Wood', category: 'BOILER', stock: 0, minThreshold: 2000, usedInModule: 'BOILER' },
+  { id: 'rm-24', name: 'Biocoal', category: 'BOILER', stock: 0, minThreshold: 2000, usedInModule: 'BOILER' },
+  // ETP Chemicals
+  { id: 'rm-25', name: 'Cougulant', category: 'ETP', stock: 0, minThreshold: 50, usedInModule: 'ETP' },
+  { id: 'rm-26', name: 'Flocculant', category: 'ETP', stock: 0, minThreshold: 50, usedInModule: 'ETP' },
+];
+
+export const DEFAULT_PRODUCTS: ProductItem[] = [
+  { id: 'p-1', name: 'Napkin Tissue', grade: 'A', gsm: 16, size: 3000, ply: 2 },
+  { id: 'p-1b', name: 'Napkin Tissue (Virgin Pulp)', grade: 'A', gsm: 16, size: 3000, ply: 2 },
+  { id: 'p-2', name: 'Soft Tissue Napkin', grade: 'A', gsm: 17, size: 3000, ply: 2 },
+  { id: 'p-3', name: 'Premium Tissue', grade: 'A', gsm: 18, size: 3000, ply: 2 },
+  { id: 'p-4', name: 'Jumbo Tissue Roll', grade: 'A', gsm: 19, size: 1200, ply: 1 },
+  { id: 'p-5', name: 'Toilet Tissue', grade: 'A', gsm: 17, size: 1000, ply: 3 },
+  { id: 'p-6', name: 'Hard Roll Towel (HRT)', grade: 'A', gsm: 24, size: 2500, ply: 1 },
+  { id: 'p-7', name: 'Kitchen Towel (KT)', grade: 'A', gsm: 22, size: 2000, ply: 1 },
+  { id: 'p-8', name: 'Kraft Paper Liner', grade: 'A', gsm: 120, size: 1100, ply: 1 },
+  { id: 'p-9', name: 'Cupstock Board', grade: 'A', gsm: 180, size: 850, ply: 1 },
+  { id: 'p-10', name: 'Duplex Board', grade: 'A', gsm: 230, size: 950, ply: 1 },
+  { id: 'p-11', name: 'Napkin B-Grade', grade: 'B', gsm: 18, size: 3000, ply: 2 },
+  { id: 'p-12', name: 'Toilet B-Grade', grade: 'B', gsm: 17, size: 1000, ply: 3 },
+  { id: 'p-13', name: 'KT B-Grade', grade: 'B', gsm: 22, size: 2000, ply: 1 },
+];
+
+export const DEFAULT_PARTIES: PartyItem[] = [
+  { id: 'pt-1', name: 'Ambika Traders', address: 'Surat, Gujarat' },
+  { id: 'pt-2', name: 'Krishna Enterprises', address: 'Ahmedabad, Gujarat' },
+  { id: 'pt-3', name: 'Kailash Paper House', address: 'Rajkot, Gujarat' },
+];
+
+export const DEFAULT_VENDORS: VendorItem[] = [
+  { id: 'vd-1', name: 'Gujarat Waste Suppliers', address: 'Baroda, Gujarat' },
+  { id: 'vd-2', name: 'National Chemical Corp', address: 'Vapi, Gujarat' },
+  { id: 'vd-3', name: 'Balaji Wood Yard', address: 'Surat, Gujarat' },
+];
+
+export const DEFAULT_VEHICLES: VehicleItem[] = [
+  { id: 'vh-1', vehicleNo: 'GJ-05-BY-1234', driverName: 'Ramesh Bhai', driverContact: '9988776655' },
+  { id: 'vh-2', vehicleNo: 'GJ-03-XX-5678', driverName: 'Suresh Patel', driverContact: '9988776656' },
+  { id: 'vh-3', vehicleNo: 'MH-04-ZZ-9012', driverName: 'Anil Singh', driverContact: '9988776657' },
+];
+
+const DEFAULT_STORE_ITEMS: StoreItem[] = [
+  { id: 'st-1', type: 'BEARING', name: '6205', pcs: 0, usageArea: 'Pulp Mill Agitator', minStock: 5, remarks: 'SKF Deep Groove' },
+  { id: 'st-2', type: 'BEARING', name: '6309', pcs: 0, usageArea: 'Machine Dryer', minStock: 4, remarks: 'FAG High Temp' },
+  { id: 'st-3', type: 'BEARING', name: '22220', pcs: 0, usageArea: 'Rewinder Shaft', minStock: 2, remarks: 'Spherical Roller' },
+  { id: 'st-4', type: 'V_BELT', name: 'C-96', pcs: 0, targetMachine: 'Vacuum Pump Drive', minStock: 4, remarks: 'Fenner Heavy Duty' },
+  { id: 'st-5', type: 'V_BELT', name: 'B-72', pcs: 0, targetMachine: 'Pulp Chest Agitator', minStock: 6, remarks: 'Raw Edge Cogged' },
+  { id: 'st-6', type: 'V_BELT', name: 'A-48', pcs: 0, targetMachine: 'Hydrapulper Motor', minStock: 5, remarks: 'Standard Anti-static' },
+];
+
+export const DEFAULT_ROLLS: MachineRoll[] = [];
+
+export const DEFAULT_REELS: Reel[] = [];
+
+export function seedSampleReels(): Reel[] {
+  return getJSON<Reel[]>(KEYS.REELS, []);
+}
+
+function seedOneMonthData(): void {
+  // Operational records start completely clean for production launch
+}
+
+export function createDefaultLabReport(): PaperTestReport {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const today = `${yyyy}-${mm}-${dd}`;
+  const dateCompact = `${yyyy}${mm}${dd}`;
+
+  return {
+    id: `PTR-${dateCompact}-01`,
+    product: 'NAPKIN TISSUE',
+    rollNo: 'ROLL-101',
+    shift: 'A',
+    date: today,
+    time: '08:30',
+    targetGsm: 16,
+    weight: 4850,
+    speed: 135,
+    crepingPct: 18.00,
+    gsmSamples: [16.1, 16.6, 16.5, 16.7, 16.9, 17.1, 16.5, 16.6, 16.4, 16.4, 16.6, 16.3, 16.1, 16.1],
+    avgGsm: 16.5,
+    maxGsm: 17.1,
+    minGsm: 16.1,
+    rangeGsm: 1.0,
+    breakageCount: 0,
+    labResultGsm: 16.5,
+    moisturePct: 5.60,
+    caliperMm: 80,
+    bulkCcGm: 4.85,
+    breakingLengthMd: 1.867,
+    breakingLengthCd: 0.701,
+    brightnessPct: 81.4,
+    tearMd: 8.00,
+    tearCd: 1.80,
+    tensileDryMd: 302.20,
+    tensileDryCd: 113.47,
+    stretchDryMd: 2.70,
+    stretchDryCd: 1.60,
+    qcStatus: 'GRADE_A',
+    remarks: 'Sample tested and cleared. Exceeds tensile strength, moisture balance, brightness (81.4%) & 16 GSM quality benchmarks with Grade-A clearance.',
+    inspector: 'Lab Tech (QC)',
+    timestamp: new Date().toISOString(),
+  };
+}
+
+// Initialize Storage if empty
+export function initializeStorage() {
+  if (!localStorage.getItem(KEYS.USERS)) setJSON(KEYS.USERS, [DEFAULT_USERS[0]], false);
+  if (!localStorage.getItem(KEYS.RAW_MATERIALS)) setJSON(KEYS.RAW_MATERIALS, [], false);
+  if (!localStorage.getItem(KEYS.PRODUCTS)) setJSON(KEYS.PRODUCTS, [], false);
+  if (!localStorage.getItem(KEYS.PARTIES)) setJSON(KEYS.PARTIES, [], false);
+  if (!localStorage.getItem(KEYS.VENDORS)) setJSON(KEYS.VENDORS, [], false);
+  if (!localStorage.getItem(KEYS.VEHICLES)) setJSON(KEYS.VEHICLES, [], false);
+  if (!localStorage.getItem(KEYS.FORMULAS)) setJSON(KEYS.FORMULAS, [], false);
+  if (!localStorage.getItem(KEYS.ROLLS)) setJSON(KEYS.ROLLS, [], false);
+  if (!localStorage.getItem(KEYS.REELS)) setJSON(KEYS.REELS, [], false);
+  if (!localStorage.getItem(KEYS.LOGS)) setJSON(KEYS.LOGS, [], false);
+  if (!localStorage.getItem(KEYS.BOILER_LOGS)) setJSON(KEYS.BOILER_LOGS, [], false);
+  if (!localStorage.getItem(KEYS.ETP_LOGS)) setJSON(KEYS.ETP_LOGS, [], false);
+  if (!localStorage.getItem(KEYS.ELECTRICITY_LOGS)) setJSON(KEYS.ELECTRICITY_LOGS, [], false);
+  if (!localStorage.getItem(KEYS.PENDING_ORDERS)) setJSON(KEYS.PENDING_ORDERS, [], false);
+  if (!localStorage.getItem(KEYS.PACKING_SLIPS)) setJSON(KEYS.PACKING_SLIPS, [], false);
+  if (!localStorage.getItem(KEYS.STORE_ITEMS)) setJSON(KEYS.STORE_ITEMS, [], false);
+  if (!localStorage.getItem(KEYS.RAW_MATERIAL_LOTS)) setJSON(KEYS.RAW_MATERIAL_LOTS, [], false);
+  if (!localStorage.getItem(KEYS.CUSTOM_ROLES)) setJSON(KEYS.CUSTOM_ROLES, [], false);
+  if (!localStorage.getItem(KEYS.DELETED_ROLES)) setJSON(KEYS.DELETED_ROLES, [], false);
+
+  if (!localStorage.getItem(KEYS.LAB_REPORTS)) {
+    const sample = createDefaultLabReport();
+    setJSON(KEYS.LAB_REPORTS, [sample], false);
+    try { localStorage.setItem('saheb_lab_seeded_v1', 'true'); } catch (_) { }
+  } else if (localStorage.getItem('saheb_lab_seeded_v1') !== 'true') {
+    const existing = getJSON<PaperTestReport[]>(KEYS.LAB_REPORTS, []);
+    if (existing.length === 0) {
+      const sample = createDefaultLabReport();
+      setJSON(KEYS.LAB_REPORTS, [sample], false);
+    }
+    try { localStorage.setItem('saheb_lab_seeded_v1', 'true'); } catch (_) { }
+  }
+
+  // Ensure Admin user has valid structure and permissions & all PINs are plain 4-digits
+  try {
+    const rawUsers = getJSON<User[]>(KEYS.USERS, [DEFAULT_USERS[0]]);
+    const validKeys = [
+      'dashboard', 'raw_material_stock', 'pulp_mill_operations', 'machine_production', 'rewinding_reel_conversion', 'lab',
+      'boiler', 'etp', 'electricity', 'orders', 'finished_stock_dispatch', 'dispatch', 'spareparts_management', 'label_studio', 'monthly_yearly_reporting'
+    ];
+    let updated = false;
+    const fixedUsers = rawUsers.map(u => {
+      if (u.pin && isPinHashed(u.pin)) {
+        u.pin = revealPin(u.pin);
+        updated = true;
+      }
+      if (u.username === 'admin') {
+        if (u.role !== 'Admin' || !u.roles || u.roles[0] !== 'Admin' || !u.customModules || u.customModules.length !== validKeys.length) {
+          u.role = 'Admin';
+          u.roles = ['Admin'];
+          u.customModules = [...validKeys];
+          updated = true;
+        }
+      }
+      if (u.username === 'pulper') {
+        if (u.role !== 'PulpOperator' || !u.roles || u.roles[0] !== 'PulpOperator') {
+          u.role = 'PulpOperator';
+          u.roles = ['PulpOperator'];
+          u.displayName = 'Pulper Operator';
+          u.designation = 'Pulper (Pulp Mill Operator)';
+          u.customModules = ['dashboard', 'raw_material_stock', 'pulp_mill_operations', 'boiler', 'etp'];
+          updated = true;
+        }
+      }
+      if (u.username === 'plant_manager') {
+        if (u.displayName === 'Lab Quality Control' || !u.displayName) {
+          u.displayName = 'Plant Manager';
+          u.designation = 'Plant Manager (Operations)';
+          updated = true;
+        }
+      }
+      return u;
+    });
+
+    if (updated) {
+      setJSON(KEYS.USERS, fixedUsers, false);
+    }
+
+    // Fix active session if @admin or @pulper session was outdated
+    const rawSession = localStorage.getItem('saheb_session');
+    if (rawSession) {
+      const session = JSON.parse(rawSession);
+      if (session.user && session.user.username === 'admin') {
+        session.user.role = 'Admin';
+        session.user.roles = ['Admin'];
+        session.user.customModules = [...validKeys];
+        localStorage.setItem('saheb_session', JSON.stringify(session));
+      } else if (session.user && session.user.username === 'pulper') {
+        session.user.role = 'PulpOperator';
+        session.user.roles = ['PulpOperator'];
+        localStorage.setItem('saheb_session', JSON.stringify(session));
+      }
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+// Ensure execution on import
+initializeStorage();
+
+// --- ROLES & CUSTOM ROLES ---
+export function getCustomRoles(): CustomRole[] {
+  const roles = getJSON<CustomRole[]>(KEYS.CUSTOM_ROLES, []);
+  const masterKeyNormalized = new Set([
+    'admin', 'plantmanager', 'laboperator', 'pulpoperator', 'viewer',
+    'shopper', 'dispatcher', 'machineoperator', 'machinery',
+    'rewinderoperator', 'boileroperator', 'warehousestaff',
+    'storemanager', 'etpoperator', 'utilitiesetpoperator', 'utilitiesetp', 'management'
+  ]);
+  return roles.filter(r => {
+    const normKey = (r.key || '').toLowerCase().replace(/\s+/g, '');
+    const normLabel = (r.label || '').toLowerCase().replace(/\s+/g, '');
+    return !masterKeyNormalized.has(normKey) && !masterKeyNormalized.has(normLabel);
+  });
+}
+
+export function getDeletedRoleKeys(): string[] {
+  return getJSON<string[]>(KEYS.DELETED_ROLES, []);
+}
+
+export function saveCustomRole(roleName: string): CustomRole {
+  const trimmed = (roleName || '').trim();
+  if (!trimmed) throw new Error('Role name is required');
+
+  // If this role was previously in deleted roles list, un-delete it!
+  const deleted = getDeletedRoleKeys();
+  const lower = trimmed.toLowerCase();
+  if (deleted.some(d => d.toLowerCase() === lower)) {
+    const updatedDeleted = deleted.filter(d => d.toLowerCase() !== lower);
+    setJSON(KEYS.DELETED_ROLES, updatedDeleted);
+    pushDeleteToCloud('deleted_roles', 'role_key', lower);
+  }
+
+  const roles = getCustomRoles();
+  const existing = roles.find(
+    r => r.label.toLowerCase() === lower || r.key.toLowerCase() === lower
+  );
+  if (existing) {
+    notifyDataUpdated('roles');
+    notifyDataUpdated('custom_roles');
+    return existing;
+  }
+  const newRole: CustomRole = {
+    key: trimmed,
+    label: trimmed,
+    desc: 'Custom Role',
+    createdAt: new Date().toISOString(),
+  };
+  roles.push(newRole);
+  setJSON(KEYS.CUSTOM_ROLES, roles);
+  pushUpsertToCloud('custom_roles', customRoleToDb(newRole));
+  notifyDataUpdated('roles');
+  notifyDataUpdated('custom_roles');
+  return newRole;
+}
+
+export function deleteRole(roleKeyOrLabel: string, operator: string = 'Admin'): boolean {
+  if (!roleKeyOrLabel) return false;
+  const target = roleKeyOrLabel.trim().toLowerCase();
+
+  // 1. Add to DELETED_ROLES list so master/system roles or custom roles stay hidden across all devices
+  const deleted = getDeletedRoleKeys();
+  if (!deleted.some(d => d.toLowerCase() === target)) {
+    deleted.push(roleKeyOrLabel.trim());
+    setJSON(KEYS.DELETED_ROLES, deleted);
+  }
+  pushUpsertToCloud('deleted_roles', { role_key: target, deleted_at: new Date().toISOString() });
+
+  // 2. Remove from custom_roles locally & in cloud
+  const customRoles = getCustomRoles();
+  const targetRole = customRoles.find(
+    r => r.key.toLowerCase() === target || r.label.toLowerCase() === target
+  );
+  const filteredCustom = customRoles.filter(
+    r => r.key.toLowerCase() !== target && r.label.toLowerCase() !== target
+  );
+  setJSON(KEYS.CUSTOM_ROLES, filteredCustom);
+  const keyToDelete = targetRole ? targetRole.key : roleKeyOrLabel.trim();
+  pushDeleteToCloud('custom_roles', 'key', keyToDelete);
+
+  // 3. Unassign this role from any existing users
+  const users = getUsers();
+  let usersModified = false;
+  users.forEach(u => {
+    if (u.roles && Array.isArray(u.roles)) {
+      const remaining = u.roles.filter(
+        r => (r as string).toLowerCase() !== target
+      );
+      if (remaining.length !== u.roles.length) {
+        u.roles = (remaining.length > 0 ? remaining : ['PlantManager']) as UserRole[];
+        if ((u.role as string).toLowerCase() === target) {
+          u.role = u.roles[0];
+        }
+        usersModified = true;
+        saveUser(u);
+      }
+    } else if ((u.role as string).toLowerCase() === target) {
+      u.role = 'PlantManager';
+      u.roles = ['PlantManager'];
+      usersModified = true;
+      saveUser(u);
+    }
+  });
+
+  notifyDataUpdated('roles');
+  notifyDataUpdated('custom_roles');
+  if (usersModified) {
+    notifyDataUpdated('users');
+  }
+
+  addLog('Admin', 'Role Deleted', `Deleted role "${roleKeyOrLabel}"`, operator);
+  return true;
+}
+
+export function deleteCustomRole(roleKeyOrLabel: string, operator: string = 'Admin'): boolean {
+  return deleteRole(roleKeyOrLabel, operator);
+}
+
+// --- AUDIT LOGS ---
+export function getLogs(): TransactionLog[] {
+  return getJSON<TransactionLog[]>(KEYS.LOGS, []);
+}
+
+export function addLog(module: string, action: string, details: string, user: string = 'System'): TransactionLog {
+  const logs = getLogs();
+  const newLog: TransactionLog = {
+    id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    timestamp: new Date().toISOString(),
+    module,
+    action,
+    details,
+    user,
+  };
+  logs.unshift(newLog);
+  setJSON(KEYS.LOGS, logs.slice(0, 500)); // Cap to latest 500 logs for high-efficiency storage
+  pushUpsertToCloud('transaction_logs', logToDb(newLog));
+  return newLog;
+}
+
+// --- USERS / AUTH ---
+export function getUsers(): User[] {
+  let users = getJSON<User[]>(KEYS.USERS, [DEFAULT_USERS[0]]);
+  if (!users || users.length === 0) {
+    users = [{ ...DEFAULT_USERS[0] }];
+  }
+
+  // Ensure legacy hashed PINs in local storage are resolved to clean 4-digit PINs
+  users = users.map(u => {
+    let p = u.pin;
+    if (p === 'df4f818c0c981749cca31bbf710533a3d1a6b07b76d6bbcad8e0fd12ac56b830') {
+      p = '1234';
+    } else if (p === '6917811201f55d3e30b2a495f2561b0a886bacd8c53e8d4438464205600cb86c') {
+      p = '1122';
+    }
+    return { ...u, pin: p || '1234' };
+  });
+
+  const customRoles = getCustomRoles();
+  const knownMasterKeys = new Set([
+    'admin', 'plantmanager', 'laboperator', 'viewer', 'shopper',
+    'dispatcher', 'pulpoperator', 'machineoperator', 'machinery',
+    'rewinderoperator', 'boileroperator', 'warehousestaff',
+    'storemanager', 'etpoperator', 'management'
+  ]);
+  const deletedKeys = new Set(getDeletedRoleKeys().map(k => k.toLowerCase()));
+  const existingCustomKeys = new Set(customRoles.map(r => r.key.toLowerCase()));
+  let discoveredNewRoles = false;
+
+  users.forEach(u => {
+    const allUserRoles = [u.role, ...(u.roles || [])];
+    allUserRoles.forEach(r => {
+      if (r && typeof r === 'string') {
+        const clean = r.trim();
+        if (
+          clean &&
+          !knownMasterKeys.has(clean.toLowerCase()) &&
+          !existingCustomKeys.has(clean.toLowerCase()) &&
+          !deletedKeys.has(clean.toLowerCase())
+        ) {
+          customRoles.push({
+            key: clean,
+            label: clean,
+            desc: 'Custom Role',
+            createdAt: new Date().toISOString(),
+          });
+          existingCustomKeys.add(clean.toLowerCase());
+          discoveredNewRoles = true;
+        }
+      }
+    });
+  });
+
+  if (discoveredNewRoles) {
+    setJSON(KEYS.CUSTOM_ROLES, customRoles, false);
+  }
+
+  const validRoles: string[] = [
+    'Admin',
+    'PlantManager',
+    'LabOperator',
+    'Viewer',
+    'Shopper',
+    'Dispatcher',
+    'PulpOperator',
+    'MachineOperator',
+    'Machinery',
+    'RewinderOperator',
+    'BoilerOperator',
+    'WarehouseStaff',
+    'StoreManager',
+    'EtpOperator',
+    'Management',
+    ...customRoles.map(r => r.key),
+    ...customRoles.map(r => r.label),
+  ];
+
+
+
+  const mapped = users.map(u => {
+    let displayName = (u.displayName || u.username || '').trim();
+    const uName = (u.username || '').toLowerCase().trim();
+
+    if (uName === 'admin') {
+      return {
+        ...u,
+        displayName: displayName || 'Administrator',
+        designation: u.designation || 'Admin / Owner',
+        role: 'Admin' as UserRole,
+        roles: ['Admin' as UserRole],
+        customModules: (u.customModules && u.customModules.length > 0) ? u.customModules : DEFAULT_USERS[0].customModules,
+      };
+    }
+
+    let primaryRole: UserRole = validRoles.includes(u.role) ? u.role : 'PlantManager';
+    let userRoles: UserRole[] = (u.roles && Array.isArray(u.roles) && u.roles.length > 0)
+      ? u.roles.filter(r => validRoles.includes(r))
+      : [primaryRole];
+    if (userRoles.length === 0) userRoles = [primaryRole];
+
+    const VALID_MODULE_KEYS = [
+      'dashboard', 'raw_material_stock', 'pulp_mill_operations', 'machine_production', 'rewinding_reel_conversion', 'lab',
+      'boiler', 'etp', 'electricity', 'orders', 'finished_stock_dispatch', 'dispatch', 'spareparts_management', 'label_studio', 'monthly_yearly_reporting'
+    ];
+
+    let customModules = (u.customModules && Array.isArray(u.customModules) && u.customModules.length > 0)
+      ? u.customModules.filter(k => VALID_MODULE_KEYS.includes(k))
+      : getDefaultModulesForRoles(userRoles);
+
+    let designation = (u.designation || '').trim();
+    if (!designation) {
+      designation = ROLE_LABELS[primaryRole] || primaryRole;
+    }
+
+    return {
+      ...u,
+      displayName,
+      designation,
+      role: primaryRole,
+      roles: userRoles,
+      customModules,
+    };
+  });
+
+  return sortUsersByHierarchy(mapped);
+}
+
+export function saveUser(user: User): User {
+  if (user.username === 'admin') {
+    user.role = 'Admin' as UserRole;
+    user.roles = ['Admin' as UserRole];
+  }
+  if (user.pin && isPinHashed(user.pin)) {
+    user.pin = revealPin(user.pin);
+  }
+  const users = getUsers();
+  const existingIndex = users.findIndex(u => u.username.toLowerCase() === user.username.toLowerCase());
+  if (existingIndex > -1) {
+    users[existingIndex] = { ...users[existingIndex], ...user };
+  } else {
+    users.push(user);
+  }
+  const sorted = sortUsersByHierarchy(users);
+  setJSON(KEYS.USERS, sorted);
+  pushUpsertToCloud('users', userToDb(user));
+
+  // Sync active session if this user is currently active
+  const rawSession = localStorage.getItem('saheb_session');
+  if (rawSession) {
+    try {
+      const session = JSON.parse(rawSession);
+      if (session.user && session.user.username.toLowerCase() === user.username.toLowerCase()) {
+        session.user = { ...session.user, ...user };
+        localStorage.setItem('saheb_session', JSON.stringify(session));
+        localStorage.setItem('saheb_active_user', JSON.stringify(session.user));
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  notifyDataUpdated('users');
+  return user;
+}
+
+export function updateUserModules(username: string, customModules: string[], operator: string): boolean {
+  const users = getUsers();
+  const user = users.find(u => u.username.toLowerCase() === username.toLowerCase());
+  if (user) {
+    // Admin roles & permissions are permanently locked to all 13 modules; cannot be modified
+    if (user.role === 'Admin' || user.username.toLowerCase() === 'admin') {
+      console.warn('[Security] Super Admin permissions are permanently locked and cannot be modified.');
+      return false;
+    }
+    const VALID_MODULE_KEYS = [
+      'dashboard', 'raw_material_stock', 'pulp_mill_operations', 'machine_production', 'rewinding_reel_conversion', 'lab',
+      'boiler', 'etp', 'electricity', 'orders', 'finished_stock_dispatch', 'dispatch', 'spareparts_management', 'label_studio', 'monthly_yearly_reporting'
+    ];
+    const finalModules = customModules.filter(m => VALID_MODULE_KEYS.includes(m));
+    user.customModules = finalModules;
+    const sorted = sortUsersByHierarchy(users);
+    setJSON(KEYS.USERS, sorted);
+    pushUpsertToCloud('users', userToDb(user));
+
+    // Sync active session if this user is currently active
+    const rawSession = localStorage.getItem('saheb_session');
+    if (rawSession) {
+      try {
+        const session = JSON.parse(rawSession);
+        if (session.user && session.user.username.toLowerCase() === username.toLowerCase()) {
+          session.user.customModules = finalModules;
+          localStorage.setItem('saheb_session', JSON.stringify(session));
+          localStorage.setItem('saheb_active_user', JSON.stringify(session.user));
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('storage'));
+      notifyDataUpdated('users');
+    }
+
+    addLog('Admin', 'Role Permissions Updated', `Updated module permissions for ${user.displayName} (@${username}): ${customModules.length} active modules`, operator);
+    return true;
+  }
+  return false;
+}
+
+export function updateRawUserPin(username: string, pin: string): boolean {
+  const users = getUsers();
+  const user = users.find(u => u.username === username);
+  if (user) {
+    user.pin = revealPin(pin);
+    user.needsPinReset = false; // cleared on custom set
+    setJSON(KEYS.USERS, users);
+    pushUpsertToCloud('users', userToDb(user));
+    addLog('Auth', 'Password Reset', `PIN updated for user: ${username}`, username);
+    return true;
+  }
+  return false;
+}
+
+export function deactivateUser(username: string, operator: string): boolean {
+  const users = getUsers();
+  const user = users.find(u => u.username === username);
+  if (user) {
+    user.active = user.active === false ? true : false; // toggle
+    setJSON(KEYS.USERS, users);
+    pushUpsertToCloud('users', userToDb(user));
+    notifyDataUpdated('users');
+    const action = user.active ? 'Activated' : 'Deactivated';
+    addLog('Admin', `User ${action}`, `User "${username}" ${action.toLowerCase()} by ${operator}`, operator);
+    return true;
+  }
+  return false;
+}
+
+export function resetUserPin(username: string, newPin: string, operator: string): boolean {
+  const users = getUsers();
+  const user = users.find(u => u.username === username);
+  if (user) {
+    user.pin = revealPin(newPin);
+    user.needsPinReset = true; // force PIN change on next login
+    setJSON(KEYS.USERS, users);
+    pushUpsertToCloud('users', userToDb(user));
+    addLog('Admin', 'PIN Reset', `PIN reset for user "${username}" by ${operator}`, operator);
+    return true;
+  }
+  return false;
+}
+
+export const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+export const MAX_FAILED_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_STORAGE_KEY = 'saheb_lockout_records';
+
+interface LockoutRecord {
+  attempts: number;
+  lockedUntil?: number;
+  lockedReason?: string;
+}
+
+function getLockoutMap(): Record<string, LockoutRecord> {
+  if (typeof localStorage === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(LOCKOUT_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function setLockoutMap(map: Record<string, LockoutRecord>): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(LOCKOUT_STORAGE_KEY, JSON.stringify(map));
+  } catch (e) {
+    console.error('Failed to save lockout map', e);
+  }
+}
+
+export function getAccountLockInfo(username: string): {
+  isLocked: boolean;
+  remainingMinutes: number;
+  failedAttempts: number;
+  securityQuestion?: string;
+  lockedReason?: string;
+} {
+  const cleanUser = username.trim().toLowerCase();
+  if (!cleanUser) {
+    return { isLocked: false, remainingMinutes: 0, failedAttempts: 0 };
+  }
+
+  const users = getUsers();
+  const user = users.find(u => u.username.toLowerCase() === cleanUser);
+
+  const lockMap = getLockoutMap();
+  const record = lockMap[cleanUser] || { attempts: user?.failedLoginAttempts || 0, lockedUntil: user?.lockedUntil };
+
+  const now = Date.now();
+  const lockedUntil = record.lockedUntil || user?.lockedUntil;
+
+  if (lockedUntil && lockedUntil > now) {
+    const remainingMs = lockedUntil - now;
+    const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60000));
+    return {
+      isLocked: true,
+      remainingMinutes,
+      failedAttempts: record.attempts || MAX_FAILED_LOGIN_ATTEMPTS,
+      securityQuestion: user?.securityQuestion || 'What is your favorite color?',
+      lockedReason: record.lockedReason || '5 consecutive failed attempts',
+    };
+  }
+
+  // If lockout duration has elapsed, auto-unlock
+  if (lockedUntil && lockedUntil <= now) {
+    delete lockMap[cleanUser];
+    setLockoutMap(lockMap);
+    if (user) {
+      user.lockedUntil = undefined;
+      user.failedLoginAttempts = 0;
+      user.lockedReason = undefined;
+      saveUser(user);
+    }
+  }
+
+  return {
+    isLocked: false,
+    remainingMinutes: 0,
+    failedAttempts: record.attempts || 0,
+    securityQuestion: user?.securityQuestion || 'What is your favorite color?',
+  };
+}
+
+export function recordFailedLogin(username: string, device: string = 'Device'): {
+  isLocked: boolean;
+  failedAttempts: number;
+  remainingAttempts: number;
+  lockedUntil?: number;
+  remainingMinutes: number;
+} {
+  const cleanUser = username.trim().toLowerCase();
+  const users = getUsers();
+  const user = users.find(u => u.username.toLowerCase() === cleanUser);
+
+  const lockMap = getLockoutMap();
+  const currentRecord = lockMap[cleanUser] || { attempts: user?.failedLoginAttempts || 0 };
+  const attempts = (currentRecord.attempts || 0) + 1;
+
+  if (attempts >= MAX_FAILED_LOGIN_ATTEMPTS) {
+    const lockTime = Date.now() + LOCKOUT_DURATION_MS;
+    lockMap[cleanUser] = {
+      attempts,
+      lockedUntil: lockTime,
+      lockedReason: `${attempts} consecutive failed PIN attempts`,
+    };
+    setLockoutMap(lockMap);
+
+    if (user) {
+      user.failedLoginAttempts = attempts;
+      user.lockedUntil = lockTime;
+      user.lockedReason = `${attempts} consecutive failed PIN attempts`;
+      saveUser(user);
+    }
+
+    // Trigger brute force alert
+    const alertData = {
+      timestamp: new Date().toISOString(),
+      username: user ? user.username : cleanUser,
+      device,
+      attempts,
+    };
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('saheb_brute_force_alert', JSON.stringify(alertData));
+    }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('storage'));
+    }
+
+    addLog('Security', 'Account Locked', `🚨 Account "${cleanUser}" locked for 15 mins due to ${attempts} failed PIN attempts on [${device}]`, 'System');
+
+    return {
+      isLocked: true,
+      failedAttempts: attempts,
+      remainingAttempts: 0,
+      lockedUntil: lockTime,
+      remainingMinutes: 15,
+    };
+  }
+
+  lockMap[cleanUser] = {
+    attempts,
+  };
+  setLockoutMap(lockMap);
+
+  if (user) {
+    user.failedLoginAttempts = attempts;
+    saveUser(user);
+  }
+
+  const remainingAttempts = Math.max(0, MAX_FAILED_LOGIN_ATTEMPTS - attempts);
+  addLog('Security', 'Failed PIN Attempt', `Failed PIN attempt #${attempts} for "${cleanUser}" on [${device}]. Remaining attempts: ${remainingAttempts}`, 'System');
+
+  return {
+    isLocked: false,
+    failedAttempts: attempts,
+    remainingAttempts,
+    remainingMinutes: 0,
+  };
+}
+
+export function resetFailedLogin(username: string): void {
+  const cleanUser = username.trim().toLowerCase();
+  const lockMap = getLockoutMap();
+  if (lockMap[cleanUser]) {
+    delete lockMap[cleanUser];
+    setLockoutMap(lockMap);
+  }
+  const users = getUsers();
+  const user = users.find(u => u.username.toLowerCase() === cleanUser);
+  if (user && (user.failedLoginAttempts || user.lockedUntil)) {
+    user.failedLoginAttempts = 0;
+    user.lockedUntil = undefined;
+    user.lockedReason = undefined;
+    saveUser(user);
+  }
+}
+
+export function unlockUserAccount(username: string, operator: string = 'Admin'): boolean {
+  const cleanUser = username.trim().toLowerCase();
+  const lockMap = getLockoutMap();
+  delete lockMap[cleanUser];
+  setLockoutMap(lockMap);
+
+  const users = getUsers();
+  const user = users.find(u => u.username.toLowerCase() === cleanUser);
+  if (user) {
+    user.lockedUntil = undefined;
+    user.failedLoginAttempts = 0;
+    user.lockedReason = undefined;
+    saveUser(user);
+    addLog('Security', 'Account Unlocked', `Account for "${user.username}" (${user.displayName}) was unlocked by ${operator}`, operator);
+  } else {
+    addLog('Security', 'Account Unlocked', `Account "${cleanUser}" was unlocked by ${operator}`, operator);
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('storage'));
+  }
+  return true;
+}
+
+export function unlockAccountWithSecurityQuestion(
+  username: string,
+  answer: string,
+  newPin?: string
+): { success: boolean; message: string } {
+  const cleanUser = username.trim().toLowerCase();
+  const users = getUsers();
+  const user = users.find(u => u.username.toLowerCase() === cleanUser);
+
+  if (!user) {
+    return { success: false, message: 'User account not found.' };
+  }
+
+  const registeredAnswer = (user.securityAnswer || 'blue').trim().toLowerCase();
+  const providedAnswer = answer.trim().toLowerCase();
+
+  if (registeredAnswer !== providedAnswer) {
+    addLog('Security', 'Unlock Failed', `Incorrect security answer provided for user "${user.username}"`, 'System');
+    return { success: false, message: 'Incorrect security answer. Please try again or contact Admin.' };
+  }
+
+  // Clear lockout map
+  const lockMap = getLockoutMap();
+  delete lockMap[cleanUser];
+  setLockoutMap(lockMap);
+
+  user.lockedUntil = undefined;
+  user.failedLoginAttempts = 0;
+  user.lockedReason = undefined;
+
+  if (newPin && newPin.trim()) {
+    const cleanPin = newPin.trim();
+    user.pin = revealPin(cleanPin);
+    user.needsPinReset = false;
+  }
+
+  saveUser(user);
+  addLog('Security', 'Account Unlocked via Security Question', `User "${user.username}" successfully answered security question and unlocked account`, user.username);
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('storage'));
+  }
+
+  return { success: true, message: 'Account successfully unlocked! You can now login.' };
+}
+
+// --- RAW MATERIALS ---
+export function getRawMaterials(): RawMaterialItem[] {
+  let materials = getJSON<RawMaterialItem[]>(KEYS.RAW_MATERIALS, []);
+  if (!materials || materials.length === 0) {
+    return DEFAULT_RAW_MATERIALS;
+  }
+
+  let hasChanges = false;
+  // Migrate existing items if category was FIREWOOD or if ETP/BOILER items need category alignment
+  materials = materials.map(m => {
+    let updated = { ...m };
+    let changed = false;
+    if (updated.category === ('FIREWOOD' as any)) {
+      updated.category = 'BOILER';
+      changed = true;
+    }
+    if (updated.name.toLowerCase().includes('coagulant') || updated.name.toLowerCase().includes('cougulant')) {
+      if (updated.category !== 'ETP') {
+        updated.category = 'ETP';
+        changed = true;
+      }
+      if (updated.name !== 'Cougulant') {
+        updated.name = 'Cougulant';
+        changed = true;
+      }
+    }
+    if (updated.name.toLowerCase().includes('flocculant')) {
+      if (updated.category !== 'ETP') {
+        updated.category = 'ETP';
+        changed = true;
+      }
+    }
+    if (updated.name.toLowerCase().includes('ro chemical')) {
+      if (updated.category !== 'BOILER') {
+        updated.category = 'BOILER';
+        changed = true;
+      }
+    }
+    if (changed) hasChanges = true;
+    return updated;
+  });
+
+  // Drop inactive duplicates if an active item with the same name exists
+  const activeNames = new Set(materials.filter(m => m.active !== false).map(m => m.name.toLowerCase().trim()));
+  const cleaned = materials.filter(m => {
+    if (m.active === false && activeNames.has(m.name.toLowerCase().trim())) {
+      hasChanges = true;
+      return false;
+    }
+    return true;
+  });
+  if (cleaned.length !== materials.length) {
+    materials = cleaned;
+    hasChanges = true;
+  }
+
+  const missingDefaults = DEFAULT_RAW_MATERIALS.filter(def => 
+    !materials.some(m => m.id === def.id || m.name.toLowerCase() === def.name.toLowerCase())
+  );
+  if (missingDefaults.length > 0) {
+    materials = [...materials, ...missingDefaults];
+    hasChanges = true;
+    missingDefaults.forEach(def => {
+      pushUpsertToCloud('raw_materials', rawMaterialToDb(def));
+    });
+  }
+  if (hasChanges) {
+    setJSON(KEYS.RAW_MATERIALS, materials, false);
+  }
+  return materials;
+}
+
+export function saveRawMaterial(material: RawMaterialItem, user: string = 'Admin'): RawMaterialItem {
+  const materials = getRawMaterials();
+  const existingIndex = materials.findIndex(m => m.id === material.id);
+  const isUpdate = existingIndex > -1;
+  if (isUpdate) {
+    materials[existingIndex] = material;
+  } else {
+    materials.push(material);
+  }
+  setJSON(KEYS.RAW_MATERIALS, materials);
+  pushUpsertToCloud('raw_materials', rawMaterialToDb(material));
+  notifyDataUpdated('raw_materials');
+  addLog(
+    'Admin',
+    isUpdate ? 'Raw Material Updated' : 'Raw Material Created',
+    `${isUpdate ? 'Updated' : 'Created'} raw material "${material.name}" (Category: ${material.category}, Min: ${material.minThreshold} kg, Stock: ${material.stock} kg)`,
+    user
+  );
+  return material;
+}
+
+export function deleteRawMaterial(id: string, user: string = 'Admin'): void {
+  const materials = getRawMaterials();
+  const target = materials.find(m => m.id === id);
+  if (target) {
+    target.active = false;
+    setJSON(KEYS.RAW_MATERIALS, materials);
+    pushUpsertToCloud('raw_materials', rawMaterialToDb(target));
+    notifyDataUpdated('raw_materials');
+    addLog('Admin', 'Raw Material Deleted', `Deleted raw material "${target.name}" (${target.category})`, user);
+  }
+}
+
+export function getActiveRawMaterials(): RawMaterialItem[] {
+  return getRawMaterials().filter(m => m.active !== false);
+}
+
+export function findRawMaterialItem(
+  matcher: (m: RawMaterialItem) => boolean
+): RawMaterialItem | undefined {
+  const materials = getRawMaterials();
+  const activeMatches = materials.filter(m => m.active !== false && matcher(m));
+  if (activeMatches.length > 0) {
+    // Prefer active item with positive stock
+    return activeMatches.find(m => (m.stock || 0) > 0) || activeMatches[0];
+  }
+  return materials.find(matcher);
+}
+
+export function getRawMaterialLots(): RawMaterialLot[] {
+  return getJSON<RawMaterialLot[]>(KEYS.RAW_MATERIAL_LOTS, []);
+}
+
+export function saveRawMaterialLot(lot: RawMaterialLot): void {
+  const lots = getRawMaterialLots();
+  lots.push(lot);
+  setJSON(KEYS.RAW_MATERIAL_LOTS, lots);
+  pushUpsertToCloud('raw_material_lots', rawMaterialLotToDb(lot));
+}
+
+export function updateRawMaterialStock(
+  id: string,
+  amount: number,
+  operatorName: string,
+  vendorName?: string
+): boolean {
+  const materials = getRawMaterials();
+  const material = materials.find(m => m.id === id);
+  if (material) {
+    material.stock = Math.max(0, parseFloat((material.stock + amount).toFixed(3)));
+    setJSON(KEYS.RAW_MATERIALS, materials);
+    pushUpsertToCloud('raw_materials', rawMaterialToDb(material));
+    notifyDataUpdated('raw_materials');
+    notifyDataUpdated('raw_material_stock');
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('storage'));
+    }
+
+    let lotNo = '';
+    if (amount >= 0) {
+      const today = new Date();
+      const dateStr = today.toISOString().substring(0, 10).replace(/-/g, '');
+      const rand = Math.floor(1000 + Math.random() * 9000);
+      lotNo = `LOT-${dateStr}-${rand}`;
+
+      const newLot: RawMaterialLot = {
+        lotNo,
+        materialId: id,
+        materialName: material.name,
+        weight: amount,
+        vendorName: vendorName || 'System Generated',
+        date: today.toISOString().substring(0, 10),
+        operator: operatorName,
+      };
+      saveRawMaterialLot(newLot);
+    }
+
+    const unit = material.name.toLowerCase().includes('ro chemical') ? 'L' : 'kg';
+    addLog(
+      'Raw Material',
+      amount >= 0 ? 'Stock Inward' : 'Stock Consumption',
+      `${amount >= 0 ? 'Added' : 'Subtracted'} ${Math.abs(amount)} ${unit} for ${material.name}. ${lotNo ? `Lot ID: ${lotNo}. ` : ''}New Stock: ${material.stock} ${unit}`,
+      operatorName
+    );
+    return true;
+  }
+  return false;
+}
+
+// --- MASTER DATA ---
+export function getProducts(): ProductItem[] {
+  const products = getJSON<ProductItem[]>(KEYS.PRODUCTS, []);
+  if (!products || products.length === 0) {
+    return DEFAULT_PRODUCTS;
+  }
+  return products;
+}
+
+export function saveProduct(product: ProductItem, user: string = 'Admin'): ProductItem {
+  const products = getProducts();
+  const existingIndex = products.findIndex(p => p.id === product.id);
+  const isUpdate = existingIndex > -1;
+  if (isUpdate) {
+    products[existingIndex] = product;
+  } else {
+    products.push(product);
+  }
+  setJSON(KEYS.PRODUCTS, products);
+  pushUpsertToCloud('products', productToDb(product));
+  addLog(
+    'Admin',
+    isUpdate ? 'Product Updated' : 'Product Created',
+    `${isUpdate ? 'Updated' : 'Created'} product "${product.name}" (${product.gsm} GSM, ${product.size} mm, ${product.ply} Ply, Grade ${product.grade})`,
+    user
+  );
+  return product;
+}
+
+export function getParties(): PartyItem[] {
+  const parties = getJSON<PartyItem[]>(KEYS.PARTIES, []);
+  if (!parties || parties.length === 0) {
+    return DEFAULT_PARTIES;
+  }
+  return parties;
+}
+
+export function saveParty(party: PartyItem, user: string = 'Admin'): PartyItem {
+  const parties = getParties();
+  const existingIndex = parties.findIndex(p => p.id === party.id);
+  const isUpdate = existingIndex > -1;
+  if (isUpdate) {
+    parties[existingIndex] = party;
+  } else {
+    parties.push(party);
+  }
+  setJSON(KEYS.PARTIES, parties);
+  pushUpsertToCloud('parties', partyToDb(party));
+  addLog(
+    'Admin',
+    isUpdate ? 'Party Updated' : 'Party Created',
+    `${isUpdate ? 'Updated' : 'Created'} customer party "${party.name}" (Contact: ${party.contact}, Address: ${party.address || 'N/A'})`,
+    user
+  );
+  return party;
+}
+
+export function getVendors(): VendorItem[] {
+  const vendors = getJSON<VendorItem[]>(KEYS.VENDORS, []);
+  if (!vendors || vendors.length === 0) {
+    return DEFAULT_VENDORS;
+  }
+  return vendors;
+}
+
+export function saveVendor(vendor: VendorItem, user: string = 'Admin'): VendorItem {
+  const vendors = getVendors();
+  const existingIndex = vendors.findIndex(v => v.id === vendor.id);
+  const isUpdate = existingIndex > -1;
+  if (isUpdate) {
+    vendors[existingIndex] = vendor;
+  } else {
+    vendors.push(vendor);
+  }
+  setJSON(KEYS.VENDORS, vendors);
+  pushUpsertToCloud('vendors', vendorToDb(vendor));
+  notifyDataUpdated('vendors');
+  addLog(
+    'Admin',
+    isUpdate ? 'Vendor Updated' : 'Vendor Created',
+    `${isUpdate ? 'Updated' : 'Created'} supplier vendor "${vendor.name}" (Contact: ${vendor.contact}, Address: ${vendor.address || 'N/A'})`,
+    user
+  );
+  return vendor;
+}
+
+export function getVehicles(): VehicleItem[] {
+  const vehicles = getJSON<VehicleItem[]>(KEYS.VEHICLES, []);
+  if (!vehicles || vehicles.length === 0) {
+    return DEFAULT_VEHICLES;
+  }
+  return vehicles;
+}
+
+export function saveVehicle(vehicle: VehicleItem, user: string = 'Admin'): VehicleItem {
+  const vehicles = getVehicles();
+  const existingIndex = vehicles.findIndex(v => v.id === vehicle.id);
+  const isUpdate = existingIndex > -1;
+  if (isUpdate) {
+    vehicles[existingIndex] = vehicle;
+  } else {
+    vehicles.push(vehicle);
+  }
+  setJSON(KEYS.VEHICLES, vehicles);
+  pushUpsertToCloud('vehicles', vehicleToDb(vehicle));
+  addLog(
+    'Admin',
+    isUpdate ? 'Vehicle Updated' : 'Vehicle Created',
+    `${isUpdate ? 'Updated' : 'Created'} vehicle "${vehicle.vehicleNo}" (Driver: ${vehicle.driverName}, Contact: ${vehicle.driverContact})`,
+    user
+  );
+  return vehicle;
+}
+
+// --- PULP MILL FORMULAS ---
+export function getFormulas(): PulpFormula[] {
+  return getJSON<PulpFormula[]>(KEYS.FORMULAS, []);
+}
+
+export interface FormulaDateResult {
+  formula: PulpFormula | null;
+  isPreviousDay: boolean;
+  formulaDate: string;
+}
+
+export function getFormulaInfoForDate(dateStr: string): FormulaDateResult {
+  const formulas = getFormulas();
+  // 1. Check for exact date match
+  const exact = formulas.find(f => f.date === dateStr);
+  if (exact) {
+    return { formula: exact, isPreviousDay: false, formulaDate: exact.date };
+  }
+
+  // 2. Check for earlier date formula (previous day's formula)
+  const earlierMatches = formulas
+    .filter(f => f.date < dateStr)
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+  if (earlierMatches.length > 0) {
+    return { formula: earlierMatches[0], isPreviousDay: true, formulaDate: earlierMatches[0].date };
+  }
+
+  // 3. Fallback to any formula if available
+  if (formulas.length > 0) {
+    const sortedAll = [...formulas].sort((a, b) => b.date.localeCompare(a.date));
+    return { formula: sortedAll[0], isPreviousDay: true, formulaDate: sortedAll[0].date };
+  }
+
+  // 4. No formula exists in system
+  return { formula: null, isPreviousDay: false, formulaDate: '' };
+}
+
+export function getFormulaForDate(dateStr: string): PulpFormula | null {
+  return getFormulaInfoForDate(dateStr).formula;
+}
+
+export function saveFormula(formula: PulpFormula, user: string): PulpFormula {
+  // Validate that waste mix sums to exactly 100
+  let totalWastePct = 0;
+  for (const key in formula.wasteMix) {
+    totalWastePct += formula.wasteMix[key];
+  }
+  if (Math.abs(totalWastePct - 100) > 0.0001) {
+    throw new Error('Waste paper mix percentages must total exactly 100%');
+  }
+
+  const formulas = getFormulas();
+  const existingIndex = formulas.findIndex(f => f.date === formula.date);
+  if (existingIndex > -1) {
+    const existing = formulas[existingIndex];
+    formula = {
+      ...formula,
+      chemicals: {
+        ...(existing.chemicals || {}),
+        ...formula.chemicals,
+      },
+    };
+    formulas[existingIndex] = formula;
+  } else {
+    formulas.push(formula);
+  }
+  setJSON(KEYS.FORMULAS, formulas);
+  pushUpsertToCloud('pulp_formulas', formulaToDb(formula));
+  addLog(
+    'Pulp Mill',
+    'Formula Logged',
+    `Formula saved for ${formula.date}. Waste paper mix: ${JSON.stringify(formula.wasteMix)}. Chemicals: ${JSON.stringify(formula.chemicals)}`,
+    user
+  );
+  return formula;
+}
+
+export function deleteFormula(formulaId: string, user: string): void {
+  const formulas = getFormulas();
+  const filtered = formulas.filter(f => f.id !== formulaId);
+  setJSON(KEYS.FORMULAS, filtered);
+  pushDeleteToCloud('pulp_formulas', 'id', formulaId);
+  addLog('Pulp Mill', 'Formula Deleted', `Formula ${formulaId} deleted.`, user);
+}
+
+export function saveMachineChemicalFormula(
+  dateStr: string,
+  machineChemicals: Record<string, number>,
+  user: string
+): PulpFormula {
+  const formulas = getFormulas();
+  let formula = formulas.find(f => f.date === dateStr);
+
+  if (!formula) {
+    const info = getFormulaInfoForDate(dateStr);
+    if (info.formula) {
+      formula = {
+        id: `f-${dateStr}-${Date.now().toString().slice(-4)}`,
+        date: dateStr,
+        wasteMix: { ...info.formula.wasteMix },
+        chemicals: { ...info.formula.chemicals, ...machineChemicals },
+      };
+    } else {
+      formula = {
+        id: `f-${dateStr}-${Date.now().toString().slice(-4)}`,
+        date: dateStr,
+        wasteMix: { 'Indian Tissue Waste': 50, 'Imported Tissue Waste': 50 },
+        chemicals: { ...machineChemicals },
+      };
+    }
+    formulas.push(formula);
+  } else {
+    formula.chemicals = {
+      ...formula.chemicals,
+      ...machineChemicals,
+    };
+  }
+
+  setJSON(KEYS.FORMULAS, formulas);
+  pushUpsertToCloud('pulp_formulas', formulaToDb(formula));
+  notifyDataUpdated('pulp_formulas');
+  addLog(
+    'Machine',
+    'Chemical Formula Updated',
+    `Updated machine chemicals formula for ${dateStr}: ${JSON.stringify(machineChemicals)}`,
+    user
+  );
+  return formula;
+}
+
+// --- MACHINE PRODUCTION ---
+export function getRolls(): MachineRoll[] {
+  const rolls = getJSON<MachineRoll[]>(KEYS.ROLLS, []);
+  return rolls || [];
+}
+
+export function saveRoll(roll: MachineRoll, user: string): MachineRoll {
+  // 1. Locate formula active on or before roll production date
+  const formula = getFormulaForDate(roll.date);
+  if (!formula) {
+    throw new Error("No active pulp mill recipe found for this date. Please log a formula in Pulp Mill first.");
+  }
+
+  // 2. Perform Real-time Stock Deductions
+  const materials = getRawMaterials();
+  const rollWeight = roll.weight; // in kg
+
+  // Verify and calculate deductions before saving
+  const updates: { id: string; name: string; amount: number }[] = [];
+
+  // A) Waste Mix Deductions
+  for (const wasteItem in formula.wasteMix) {
+    const pct = formula.wasteMix[wasteItem];
+    const deductKg = rollWeight * (pct / 100);
+    // Find material in database matching the waste paper name
+    const mat = materials.find(m => m.name === wasteItem && m.category === 'WASTE_PAPER');
+    if (mat) {
+      updates.push({ id: mat.id, name: mat.name, amount: -deductKg });
+    } else {
+      // Fallback search in OTHER_RAW_MATERIAL (e.g. Broke, Pulp Sheet, SMK)
+      const otherMat = materials.find(m => m.name === wasteItem);
+      if (otherMat) {
+        updates.push({ id: otherMat.id, name: otherMat.name, amount: -deductKg });
+      }
+    }
+  }
+
+  // B) Chemical Deductions
+  for (const chemicalName in formula.chemicals) {
+    const dosageKgPerTon = formula.chemicals[chemicalName];
+    const deductKg = (rollWeight / 1000) * dosageKgPerTon;
+    const mat = materials.find(m => m.name === chemicalName && m.category === 'CHEMICAL');
+    if (mat) {
+      updates.push({ id: mat.id, name: mat.name, amount: -deductKg });
+    }
+  }
+
+  // 3. Atomically apply deductions
+  updates.forEach(upd => {
+    updateRawMaterialStock(upd.id, upd.amount, user);
+  });
+
+  // 4. Save Roll
+  const rolls = getRolls();
+  roll.formulaId = formula.id;
+  const existingIdx = rolls.findIndex(r => r.rollNo.toUpperCase() === roll.rollNo.toUpperCase());
+  if (existingIdx > -1) {
+    rolls[existingIdx] = roll;
+  } else {
+    rolls.push(roll);
+  }
+  setJSON(KEYS.ROLLS, rolls);
+  pushUpsertToCloud('machine_rolls', machineRollToDb(roll));
+  notifyDataUpdated('machine_rolls');
+
+  addLog(
+    'Machine',
+    'Roll Produced',
+    `Roll #${roll.rollNo} logged: ${roll.product}, ${roll.weight}kg, GSM ${roll.gsm}, width ${roll.width}mm. Auto-deductions processed.`,
+    user
+  );
+
+  return roll;
+}
+
+export function markRollAsConsumed(rollNo: string): void {
+  if (!rollNo) return;
+  const rolls = getRolls();
+  const clean = rollNo.trim().toLowerCase();
+  let modified = false;
+  let updatedRoll: MachineRoll | undefined;
+  const updated = rolls.map(r => {
+    if (r.rollNo.trim().toLowerCase() === clean) {
+      modified = true;
+      updatedRoll = { ...r, status: 'CONSUMED' as const, isRewound: true };
+      return updatedRoll;
+    }
+    return r;
+  });
+  if (modified) {
+    setJSON(KEYS.ROLLS, updated);
+    if (updatedRoll) {
+      pushUpsertToCloud('machine_rolls', machineRollToDb(updatedRoll));
+    }
+    notifyDataUpdated('machine_rolls');
+  }
+}
+
+export function updateMachineRoll(
+  rollNo: string,
+  updatedFields: Partial<MachineRoll>,
+  user: string = 'Operator'
+): MachineRoll {
+  if (!rollNo) throw new Error('Invalid Roll Number');
+  const rolls = getRolls();
+  const cleanNo = rollNo.trim().toUpperCase();
+  const rollIdx = rolls.findIndex(r => r.rollNo.trim().toUpperCase() === cleanNo);
+  if (rollIdx === -1) {
+    throw new Error(`Roll #${rollNo} not found in database.`);
+  }
+
+  const current = rolls[rollIdx];
+  const oldWeight = current.weight || 0;
+  const newWeight = updatedFields.weight !== undefined && !isNaN(Number(updatedFields.weight))
+    ? Number(updatedFields.weight)
+    : oldWeight;
+
+  const weightDiff = newWeight - oldWeight;
+
+  // Auto-adjust raw material stock if weight changed
+  if (weightDiff !== 0) {
+    try {
+      const formula = getFormulaForDate(updatedFields.date || current.date) ||
+        (current.formulaId ? getFormulas().find(f => f.id === current.formulaId) : null);
+      if (formula) {
+        const materials = getRawMaterials();
+        for (const wasteItem in formula.wasteMix) {
+          const pct = formula.wasteMix[wasteItem];
+          const adjustKg = weightDiff * (pct / 100);
+          const mat = materials.find(m => m.name === wasteItem && m.category === 'WASTE_PAPER') || materials.find(m => m.name === wasteItem);
+          if (mat) {
+            updateRawMaterialStock(mat.id, -adjustKg, user);
+          }
+        }
+        for (const chemicalName in formula.chemicals) {
+          const dosage = formula.chemicals[chemicalName];
+          const adjustKg = (weightDiff / 1000) * dosage;
+          const mat = materials.find(m => m.name === chemicalName && m.category === 'CHEMICAL');
+          if (mat) {
+            updateRawMaterialStock(mat.id, -adjustKg, user);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Could not auto-adjust formula stock on roll edit:', e);
+    }
+  }
+
+  const updated: MachineRoll = {
+    ...current,
+    ...updatedFields,
+    rollNo: current.rollNo, // Keep primary roll key stable
+  };
+
+  rolls[rollIdx] = updated;
+  setJSON(KEYS.ROLLS, rolls);
+  pushUpsertToCloud('machine_rolls', machineRollToDb(updated));
+  notifyDataUpdated('machine_rolls');
+
+  addLog(
+    'Machine',
+    'Roll Updated',
+    `Roll #${current.rollNo} details updated: ${updated.product}, ${updated.weight}kg, GSM ${updated.gsm}, width ${updated.width}mm.`,
+    user
+  );
+
+  return updated;
+}
+
+export function updateMachineRollSpecs(
+  rollNo: string,
+  specs: { weight?: number; gsm?: number; width?: number; product?: string },
+  user: string = 'RewinderOperator'
+): boolean {
+  if (!rollNo) return false;
+  const rolls = getRolls();
+  const cleanNo = rollNo.trim().toLowerCase();
+  const rollIdx = rolls.findIndex(r => r.rollNo.trim().toLowerCase() === cleanNo);
+  if (rollIdx === -1) return false;
+
+  const current = rolls[rollIdx];
+  const updated: MachineRoll = {
+    ...current,
+    weight: specs.weight !== undefined && !isNaN(specs.weight) ? specs.weight : current.weight,
+    gsm: specs.gsm !== undefined && !isNaN(specs.gsm) ? specs.gsm : current.gsm,
+    width: specs.width !== undefined && !isNaN(specs.width) ? specs.width : current.width,
+    product: specs.product || current.product,
+  };
+
+  rolls[rollIdx] = updated;
+  setJSON(KEYS.ROLLS, rolls);
+  pushUpsertToCloud('machine_rolls', machineRollToDb(updated));
+  notifyDataUpdated('machine_rolls');
+  return true;
+}
+
+export function deleteMachineRoll(rollNo: string, user: string = 'Operator'): boolean {
+  if (!rollNo) return false;
+  const rolls = getRolls();
+  const cleanNo = rollNo.trim().toUpperCase();
+  const rollIdx = rolls.findIndex(r => r.rollNo.trim().toUpperCase() === cleanNo);
+  if (rollIdx === -1) return false;
+
+  const current = rolls[rollIdx];
+  const rollWeight = current.weight || 0;
+
+  // Auto-refund raw material stock (waste paper and chemicals)
+  if (rollWeight > 0) {
+    try {
+      const formula = getFormulaForDate(current.date) ||
+        (current.formulaId ? getFormulas().find(f => f.id === current.formulaId) : null);
+      if (formula) {
+        const materials = getRawMaterials();
+        for (const wasteItem in formula.wasteMix) {
+          const pct = formula.wasteMix[wasteItem];
+          const refundKg = rollWeight * (pct / 100);
+          const mat = materials.find(m => m.name === wasteItem && m.category === 'WASTE_PAPER') || materials.find(m => m.name === wasteItem);
+          if (mat) {
+            updateRawMaterialStock(mat.id, refundKg, user);
+          }
+        }
+        for (const chemicalName in formula.chemicals) {
+          const dosage = formula.chemicals[chemicalName];
+          const refundKg = (rollWeight / 1000) * dosage;
+          const mat = materials.find(m => m.name === chemicalName && m.category === 'CHEMICAL');
+          if (mat) {
+            updateRawMaterialStock(mat.id, refundKg, user);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Could not auto-refund formula stock on roll delete:', e);
+    }
+  }
+
+  rolls.splice(rollIdx, 1);
+  setJSON(KEYS.ROLLS, rolls);
+  pushDeleteToCloud('machine_rolls', 'roll_no', current.rollNo);
+  notifyDataUpdated('machine_rolls');
+
+  addLog(
+    'Machine',
+    'Roll Deleted',
+    `Roll #${current.rollNo} (${current.product}, ${current.weight}kg) was deleted by ${user}. Raw material stock refunded.`,
+    user
+  );
+
+  return true;
+}
+
+
+// --- REWINDER ---
+export function getReels(): Reel[] {
+  let existing = getJSON<Reel[]>(KEYS.REELS, []);
+
+  // Automatic Migration: Upgrade any legacy R-2026 dummy format to standard 8-digit paper mill format (YYMMNNNN)
+  if (existing && existing.length > 0 && existing.some(r => r.reelNo && r.reelNo.startsWith('R-2026'))) {
+    existing = existing.map(r => {
+      if (r.reelNo && r.reelNo.startsWith('R-2026')) {
+        const lastDigit = r.reelNo.slice(-1);
+        return { ...r, reelNo: `2609007${lastDigit}` };
+      }
+      return r;
+    });
+    setJSON(KEYS.REELS, existing, false);
+  }
+
+  // Purge any ghost duplicate reels 26100009..14 for R-20260930-0001 if still in local storage
+  const ghostReelNos = new Set(['26100009', '26100010', '26100011', '26100012', '26100013', '26100014']);
+  if (existing && existing.length > 0 && existing.some(r => ghostReelNos.has(r.reelNo))) {
+    existing = existing.filter(r => !ghostReelNos.has(r.reelNo));
+    setJSON(KEYS.REELS, existing, false);
+  }
+
+  if (!existing || existing.length === 0) {
+    return [];
+  }
+
+  // Automatic Deduplication & Data Integrity Engine:
+  // Deduplicate exact reel numbers (keep first unique occurrence)
+  const uniqueReelsMap = new Map<string, Reel>();
+  let hasDuplicates = false;
+  existing.forEach(r => {
+    if (r && r.reelNo) {
+      const key = r.reelNo.trim().toLowerCase();
+      if (!uniqueReelsMap.has(key)) {
+        uniqueReelsMap.set(key, r);
+      } else {
+        hasDuplicates = true;
+      }
+    }
+  });
+  if (hasDuplicates) {
+    existing = Array.from(uniqueReelsMap.values());
+  }
+
+  const seenNos = new Set<string>();
+  let maxNumeric = 260500586;
+
+  existing.forEach(r => {
+    if (r && r.reelNo) {
+      const match = r.reelNo.match(/^(?:.*?)?(\d+)$/);
+      if (match) {
+        const val = parseInt(match[1], 10);
+        if (!isNaN(val) && val > maxNumeric) {
+          maxNumeric = val;
+        }
+      }
+    }
+  });
+
+  const cleaned = existing.map((r, idx) => {
+    let fixedReel = r;
+    if (!r.reelNo || seenNos.has(r.reelNo)) {
+      hasDuplicates = true;
+      maxNumeric++;
+      const uniqueNo = String(maxNumeric);
+      seenNos.add(uniqueNo);
+      fixedReel = { ...r, reelNo: uniqueNo };
+    } else {
+      seenNos.add(r.reelNo);
+    }
+
+    if (fixedReel.status === 'QC_PENDING' || !fixedReel.qcGrade || fixedReel.qcGrade === 'PENDING') {
+      const targetGrade: 'A' | 'B' = idx % 6 === 0 ? 'B' : 'A';
+      return {
+        ...fixedReel,
+        status: (targetGrade === 'A' ? 'IN_STOCK' : 'IN_STOCK_B') as Reel['status'],
+        qcGrade: targetGrade,
+        qcGsmResult: fixedReel.gsm ? Number((fixedReel.gsm + (idx % 2 === 0 ? 0.1 : -0.1)).toFixed(1)) : 18,
+        qcBrightness: 84 + (idx % 5),
+        qcSoftness: targetGrade === 'A' ? 7 + (idx % 3) : 5,
+        qcInspector: fixedReel.qcInspector || 'Rajesh Sharma (QC Specialist)',
+        qcTimestamp: fixedReel.qcTimestamp || '2026-09-14 12:00',
+      };
+    }
+
+    // Normalize CHALLAN- to PS-
+    if (fixedReel.challanNo && fixedReel.challanNo.toUpperCase().startsWith('CHALLAN-')) {
+      const after = fixedReel.challanNo.substring('CHALLAN-'.length);
+      const match = after.match(/-(\d+)$/);
+      const cleanNum = match ? (match[1].replace(/^0+/, '') || match[1]) : after;
+      fixedReel = { ...fixedReel, challanNo: `PS-${cleanNum}` };
+      hasDuplicates = true;
+    }
+    if (fixedReel.dispatchDetails?.packingSlipNo && fixedReel.dispatchDetails.packingSlipNo.toUpperCase().startsWith('CHALLAN-')) {
+      const after = fixedReel.dispatchDetails.packingSlipNo.substring('CHALLAN-'.length);
+      const match = after.match(/-(\d+)$/);
+      const cleanNum = match ? (match[1].replace(/^0+/, '') || match[1]) : after;
+      fixedReel = {
+        ...fixedReel,
+        dispatchDetails: {
+          ...fixedReel.dispatchDetails,
+          packingSlipNo: `PS-${cleanNum}`,
+        },
+      };
+      hasDuplicates = true;
+    }
+
+    return fixedReel;
+  });
+
+  if (hasDuplicates) {
+    setJSON(KEYS.REELS, cleaned, false);
+    pushUpsertToCloud('reels', cleaned.map(reelToDb));
+  }
+
+  return cleaned;
+}
+
+export function saveReelsFromRoll(
+  rollNo: string,
+  reels: Reel[],
+  brokeWeight: number,
+  user: string
+): void {
+  const currentReels = getReels();
+  const existingSet = new Set(currentReels.map(r => r.reelNo));
+  let maxNumeric = 260500586;
+  currentReels.forEach(r => {
+    const match = r.reelNo.match(/^(?:.*?)?(\d+)$/);
+    if (match) {
+      const val = parseInt(match[1], 10);
+      if (!isNaN(val) && val > maxNumeric) maxNumeric = val;
+    }
+  });
+
+  // 1. Process Broke recycling loop (Adds brokeWeight back into Broke stock)
+  if (brokeWeight > 0) {
+    const materials = getRawMaterials();
+    const brokeMaterial = materials.find(m => m.name === 'Broke');
+    if (brokeMaterial) {
+      updateRawMaterialStock(brokeMaterial.id, brokeWeight, user);
+    }
+  }
+
+  // 2. Save new reels with strictly guaranteed unique reel numbers
+  reels.forEach(newReel => {
+    let finalReelNo = newReel.reelNo ? newReel.reelNo.trim() : '';
+    if (!finalReelNo || existingSet.has(finalReelNo)) {
+      maxNumeric++;
+      finalReelNo = String(maxNumeric);
+    }
+    existingSet.add(finalReelNo);
+
+    if (!newReel.status) {
+      newReel.status = 'QC_PENDING';
+      newReel.qcGrade = 'PENDING';
+    }
+    currentReels.push({ ...newReel, reelNo: finalReelNo });
+  });
+
+  pushUpsertToCloud('reels', currentReels.map(reelToDb));
+  markRollAsConsumed(rollNo);
+  addLog(
+    'Rewinder',
+    'Roll Rewound',
+    `Converted Roll #${rollNo} into ${reels.length} reels. Returned ${brokeWeight}kg Broke to stock.`,
+    user
+  );
+}
+
+export function saveSingleReel(
+  reel: Reel,
+  brokeWeight: number,
+  user: string
+): void {
+  const currentReels = getReels();
+  const existingSet = new Set(currentReels.map(r => r.reelNo));
+
+  if (brokeWeight > 0) {
+    const materials = getRawMaterials();
+    const brokeMaterial = materials.find(m => m.name === 'Broke');
+    if (brokeMaterial) {
+      updateRawMaterialStock(brokeMaterial.id, brokeWeight, user);
+    }
+  }
+
+  let finalReelNo = reel.reelNo ? reel.reelNo.trim() : '';
+  if (!finalReelNo || existingSet.has(finalReelNo)) {
+    let maxNumeric = 260500586;
+    currentReels.forEach(r => {
+      const match = r.reelNo.match(/^(?:.*?)?(\d+)$/);
+      if (match) {
+        const val = parseInt(match[1], 10);
+        if (!isNaN(val) && val > maxNumeric) maxNumeric = val;
+      }
+    });
+    finalReelNo = String(maxNumeric + 1);
+  }
+
+  if (!reel.status) {
+    reel.status = 'QC_PENDING';
+    reel.qcGrade = 'PENDING';
+  }
+
+  const newReelObj = { ...reel, reelNo: finalReelNo };
+  currentReels.push(newReelObj);
+  setJSON(KEYS.REELS, currentReels);
+  pushUpsertToCloud('reels', reelToDb(newReelObj));
+
+  if (reel.parentRollNo) {
+    const parts = reel.parentRollNo.split('/').map(p => p.trim());
+    parts.forEach(p => {
+      if (p) markRollAsConsumed(p);
+    });
+  }
+
+  addLog(
+    'Rewinder',
+    'Reel Logged',
+    `Reel #${finalReelNo} logged: ${reel.product}, ${reel.weight}kg, GSM ${reel.gsm}. Returned ${brokeWeight}kg Broke to stock.`,
+    user
+  );
+}
+
+export function saveReel(reel: Reel, user: string, originalReelNo?: string): Reel {
+  const currentReels = getReels();
+  const targetReelNo = originalReelNo || reel.reelNo;
+  const index = currentReels.findIndex(r => r.reelNo === targetReelNo);
+
+  // If reel number was changed, delete old record from Supabase cloud
+  if (originalReelNo && originalReelNo !== reel.reelNo) {
+    pushDeleteToCloud('reels', 'reel_no', originalReelNo);
+  }
+
+  if (index > -1) {
+    currentReels[index] = reel;
+  } else {
+    currentReels.unshift(reel);
+  }
+  setJSON(KEYS.REELS, currentReels);
+  pushUpsertToCloud('reels', reelToDb(reel));
+  addLog(
+    'Rewinder',
+    'Reel Updated',
+    `Updated Reel #${reel.reelNo}${originalReelNo && originalReelNo !== reel.reelNo ? ` (was #${originalReelNo})` : ''} specs: ${reel.product}, ${reel.weight}kg, GSM ${reel.gsm}`,
+    user
+  );
+  return reel;
+}
+
+export function updateBatchReels(
+  parentRollNo: string,
+  updatedReels: (Reel & { originalReelNo?: string })[],
+  originalReels: Reel[],
+  user: string
+): { success: boolean; error?: string } {
+  try {
+    const allExistingReels = getReels();
+    const currentReelNos = new Set(updatedReels.map(r => r.reelNo.trim().toLowerCase()));
+    const cleanParentRoll = (parentRollNo || '').trim().toLowerCase();
+
+    // 1. Identify all reels for this roll that are being removed or renamed
+    const deletedNos: string[] = [];
+
+    // Check originalReels
+    for (const orig of originalReels) {
+      if (!currentReelNos.has(orig.reelNo.trim().toLowerCase())) {
+        if (!deletedNos.includes(orig.reelNo.trim())) {
+          deletedNos.push(orig.reelNo.trim());
+        }
+      }
+    }
+    // Check allExistingReels for this parentRollNo
+    for (const existing of allExistingReels) {
+      const p = (existing.parentRollNo || '').trim().toLowerCase();
+      if (cleanParentRoll && p === cleanParentRoll) {
+        if (!currentReelNos.has(existing.reelNo.trim().toLowerCase()) && !deletedNos.includes(existing.reelNo.trim())) {
+          deletedNos.push(existing.reelNo.trim());
+        }
+      }
+    }
+    // For renamed reels, old reel numbers must be deleted from cloud
+    for (const orig of originalReels) {
+      const match = updatedReels.find(u => u.originalReelNo && u.originalReelNo.toLowerCase() === orig.reelNo.toLowerCase());
+      if (match && match.reelNo.trim().toLowerCase() !== orig.reelNo.trim().toLowerCase()) {
+        if (!deletedNos.includes(orig.reelNo.trim())) {
+          deletedNos.push(orig.reelNo.trim());
+        }
+      }
+    }
+
+    // Delete removed/renamed reel numbers from Supabase cloud
+    if (deletedNos.length > 0) {
+      pushDeleteToCloud('reels', 'reel_no', deletedNos);
+    }
+
+    // 2. Broke stock adjustment in Raw Materials (Rule 6: Broke = Parent Roll Weight - Sum of Cut Reels)
+    let parentRollWeight = 0;
+    if (cleanParentRoll) {
+      const allRolls = getRolls();
+      const parts = cleanParentRoll.split('/').map(p => p.trim());
+      parts.forEach(p => {
+        const found = allRolls.find(r => (r.rollNo || '').trim().toLowerCase() === p)
+          || allRolls.find(r => {
+            const normP = p.replace(/[\s\-_]/g, '').replace(/^r/i, '').replace(/^0+/, '');
+            const normR = (r.rollNo || '').trim().toLowerCase().replace(/[\s\-_]/g, '').replace(/^r/i, '').replace(/^0+/, '');
+            return normP && normR && normP === normR;
+          });
+        if (found && found.weight) {
+          parentRollWeight += Number(found.weight) || 0;
+        }
+      });
+    }
+
+    if (parentRollWeight > 0) {
+      const oldReelSum = originalReels.reduce((sum, r) => sum + Number(r.weight || 0), 0);
+      const newReelSum = updatedReels.reduce((sum, r) => sum + Number(r.weight || 0), 0);
+      const oldBroke = Math.max(0, parentRollWeight - oldReelSum);
+      const newBroke = Math.max(0, parentRollWeight - newReelSum);
+      const brokeDiff = newBroke - oldBroke;
+      if (brokeDiff !== 0) {
+        const materials = getRawMaterials();
+        const brokeMaterial = materials.find(m => m.name === 'Broke');
+        if (brokeMaterial) {
+          updateRawMaterialStock(brokeMaterial.id, brokeDiff, user);
+        }
+      }
+    }
+
+    // 3. Update in local storage: remove ALL reels of this parent roll, then append cleanedReels
+    const deletedNosSet = new Set(deletedNos.map(n => n.toLowerCase()));
+    const remainingReels = allExistingReels.filter(r => {
+      const rParent = (r.parentRollNo || '').trim().toLowerCase();
+      if (cleanParentRoll && rParent === cleanParentRoll) return false;
+      if (deletedNosSet.has(r.reelNo.trim().toLowerCase())) return false;
+      return true;
+    });
+    
+    // Clean originalReelNo helper prop before persisting
+    const cleanedReels: Reel[] = updatedReels.map(r => {
+      const { originalReelNo, ...rest } = r;
+      return rest;
+    });
+
+    const finalReels = [...remainingReels, ...cleanedReels];
+    setJSON(KEYS.REELS, finalReels);
+
+    // 4. Cloud upsert
+    for (const r of cleanedReels) {
+      pushUpsertToCloud('reels', reelToDb(r));
+    }
+
+    addLog(
+      'Rewinder',
+      'Reels Updated',
+      `Updated ${cleanedReels.length} reel(s) for Roll #${parentRollNo}${deletedNos.length > 0 ? ` (removed ${deletedNos.length} reel(s))` : ''}`,
+      user
+    );
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error updating batch reels:', err);
+    return { success: false, error: err.message || 'Failed to update reels' };
+  }
+}
+
+export function updateReelQC(
+  reelNo: string,
+  qcGrade: 'A' | 'B',
+  gsmResult: number,
+  brightness: number,
+  softness: number,
+  inspector: string
+): boolean {
+  const reels = getReels();
+  const reel = reels.find(r => r.reelNo === reelNo);
+  if (reel) {
+    reel.qcGrade = qcGrade;
+    reel.status = qcGrade === 'A' ? 'IN_STOCK' : 'IN_STOCK_B';
+    reel.qcGsmResult = gsmResult;
+    reel.qcBrightness = brightness;
+    reel.qcSoftness = softness;
+    reel.qcInspector = inspector;
+    reel.qcTimestamp = new Date().toISOString();
+
+    setJSON(KEYS.REELS, reels);
+    pushUpsertToCloud('reels', reelToDb(reel));
+    addLog(
+      'QC Inspection',
+      `QC_${qcGrade === 'A' ? 'PASS' : 'FAIL'}`,
+      `Reel ${reelNo} graded as ${qcGrade} (GSM: ${gsmResult}, Brightness: ${brightness}%, Softness: ${softness}/10). Status: ${reel.status}`,
+      inspector
+    );
+    return true;
+  }
+  return false;
+}
+
+// --- BOILER ---
+export function getBoilerLogs(): BoilerLog[] {
+  return getJSON<BoilerLog[]>(KEYS.BOILER_LOGS, []);
+}
+
+export function saveBoilerLog(log: BoilerLog, user: string): BoilerLog {
+  const logs = getBoilerLogs();
+  logs.push(log);
+  setJSON(KEYS.BOILER_LOGS, logs);
+  pushUpsertToCloud('boiler_logs', boilerLogToDb(log));
+
+  // Deduct wood from raw materials if it's logged
+  if (log.woodUsed > 0) {
+    const woodMat = findRawMaterialItem(m => 
+      (m.name.toLowerCase() === 'wood' || m.name.toLowerCase().includes('wood') || m.name.toLowerCase().includes('firewood')) &&
+      (m.category === 'BOILER' || (m.category as string) === 'FIREWOOD')
+    );
+    if (woodMat) {
+      updateRawMaterialStock(woodMat.id, -log.woodUsed, user);
+    }
+  }
+
+  // Deduct RO Chemical from raw materials if it's logged
+  if (log.roChemical && log.roChemical > 0) {
+    const roMat = findRawMaterialItem(m => 
+      m.name.toLowerCase().includes('ro chemical') || m.name.toLowerCase() === 'ro chemical'
+    );
+    if (roMat) {
+      updateRawMaterialStock(roMat.id, -log.roChemical, user);
+    }
+  }
+
+  addLog(
+    'Boiler',
+    'Boiler Shift Logged',
+    `Boiler entry: wood used ${log.woodUsed}kg, water used ${log.waterUsed}L, pressure ${log.pressure}psi${log.roChemical ? `, RO Chemical ${log.roChemical}L` : ''}`,
+    user
+  );
+  return log;
+}
+
+// --- ETP ---
+export function getEtpLogs(): EtpLog[] {
+  return getJSON<EtpLog[]>(KEYS.ETP_LOGS, []);
+}
+
+export function saveEtpLog(log: EtpLog, user: string): EtpLog {
+  const logs = getEtpLogs();
+  logs.push(log);
+  setJSON(KEYS.ETP_LOGS, logs);
+  pushUpsertToCloud('etp_logs', etpLogToDb(log));
+
+  // Deduct Cougulant from raw materials if logged
+  if (log.flockLiq && log.flockLiq > 0) {
+    const coagMat = findRawMaterialItem(m => 
+      (m.category === 'ETP' && (m.name.toLowerCase().includes('coug') || m.name.toLowerCase().includes('coag'))) ||
+      m.name.toLowerCase().includes('coagulant') || 
+      m.name.toLowerCase().includes('cougulant') ||
+      m.name.toLowerCase().includes('flock 100')
+    );
+    if (coagMat) {
+      updateRawMaterialStock(coagMat.id, -log.flockLiq, user);
+    }
+  }
+
+  // Deduct Flocculant from raw materials if logged
+  if (log.flockMaster && log.flockMaster > 0) {
+    const flocMat = findRawMaterialItem(m => 
+      (m.category === 'ETP' && m.name.toLowerCase().includes('floc')) ||
+      m.name.toLowerCase().includes('flocculant') || 
+      m.name.toLowerCase().includes('flock master')
+    );
+    if (flocMat) {
+      updateRawMaterialStock(flocMat.id, -log.flockMaster, user);
+    }
+  }
+
+  addLog(
+    'ETP',
+    'ETP Logged',
+    `ETP entry: Cougulant ${log.flockLiq}kg, Flocculant ${log.flockMaster}kg`,
+    user
+  );
+  return log;
+}
+
+// --- ELECTRICITY ---
+export function getElectricityLogs(): ElectricityLog[] {
+  return getJSON<ElectricityLog[]>(KEYS.ELECTRICITY_LOGS, []);
+}
+
+export function saveElectricityLog(log: ElectricityLog, user: string): ElectricityLog {
+  const logs = getElectricityLogs();
+  logs.push(log);
+  setJSON(KEYS.ELECTRICITY_LOGS, logs);
+  pushUpsertToCloud('electricity_logs', electricityLogToDb(log));
+
+  addLog(
+    'Electricity',
+    'Electricity Logged',
+    `Electricity entry: consumed ${log.units} kWh`,
+    user
+  );
+  return log;
+}
+
+// --- PENDING ORDERS ---
+export function syncOrdersWithDispatches(): PendingOrder[] {
+  const orders = getJSON<PendingOrder[]>(KEYS.PENDING_ORDERS, []);
+  if (!orders || orders.length === 0) return [];
+
+  const slips = getJSON<PackingSlip[]>(KEYS.PACKING_SLIPS, []);
+  const reels = getJSON<Reel[]>(KEYS.REELS, []);
+  const products = getProducts();
+
+  const isMatch = (a: string, b: string) => (a || '').trim().toUpperCase() === (b || '').trim().toUpperCase();
+
+  // 1. Group dispatched reels by orderNo (Direct Link) and by partyId (Fallback)
+  const orderDispatchedReelsMap = new Map<string, Reel[]>();
+  const partyDispatchedReelsMap = new Map<string, Reel[]>();
+
+  slips.forEach(slip => {
+    if (slip.status === 'DISPATCHED' || slip.status === 'CONFIRMED') {
+      const slipReels: Reel[] = (slip.reelNos || []).map(rNo => {
+        const found = reels.find(r => isMatch(r.reelNo, rNo));
+        return found || {
+          reelNo: rNo,
+          parentRollNo: '',
+          product: 'Paper Reel',
+          weight: 1250,
+          dia: 1150,
+          gsm: 16,
+          size: 30,
+          ply: 2,
+          joint: 0,
+          status: 'DISPATCHED',
+          qcGrade: 'A',
+          productionDate: slip.date,
+        };
+      });
+
+      // If slip is explicitly linked to an order
+      const cleanOrderNo = (slip.orderNo || '').trim().toUpperCase();
+      if (cleanOrderNo) {
+        if (!orderDispatchedReelsMap.has(cleanOrderNo)) {
+          orderDispatchedReelsMap.set(cleanOrderNo, []);
+        }
+        orderDispatchedReelsMap.get(cleanOrderNo)!.push(...slipReels);
+      } else {
+        // Fallback for slips without orderNo
+        const partyId = slip.partyId;
+        if (!partyDispatchedReelsMap.has(partyId)) {
+          partyDispatchedReelsMap.set(partyId, []);
+        }
+        partyDispatchedReelsMap.get(partyId)!.push(...slipReels);
+      }
+    }
+  });
+
+  const allocatedReelNos = new Set<string>();
+
+  const updatedOrders = orders.map(order => {
+    const cleanOrderNo = (order.orderNo || order.id || '').trim().toUpperCase();
+    const directOrderReels = orderDispatchedReelsMap.get(cleanOrderNo) || [];
+    const partyReels = partyDispatchedReelsMap.get(order.partyId) || [];
+
+    const orderWeightKg = Math.round((order.weightTons || 0) * 1000);
+    const orderQty = Math.max(1, order.qty || 1);
+
+    let dispatchedWeight = 0;
+    let dispatchedCount = 0;
+
+    if (directOrderReels.length > 0) {
+      // Direct Link: Use reels dispatched specifically under this Order No
+      directOrderReels.forEach(reel => {
+        dispatchedCount++;
+        dispatchedWeight += (reel.weight || 1250);
+        allocatedReelNos.add(reel.reelNo);
+      });
+    } else {
+      // Fallback: match by party and product specs
+      const prod = products.find(p => p.id === order.productId);
+      const prodName = prod ? prod.name.toLowerCase() : '';
+
+      partyReels.forEach(reel => {
+        if (allocatedReelNos.has(reel.reelNo)) return;
+        const reelProd = (reel.product || '').toLowerCase();
+        const matchFamily =
+          (prodName.includes('napkin') && reelProd.includes('napkin')) ||
+          (prodName.includes('toilet') && reelProd.includes('toilet')) ||
+          (prodName.includes('towel') && reelProd.includes('towel')) ||
+          (prodName.includes('facial') && reelProd.includes('facial')) ||
+          (prodName.includes('kt') && reelProd.includes('kt')) ||
+          (prodName.includes('hrt') && reelProd.includes('hrt')) ||
+          reelProd === prodName ||
+          !prodName;
+
+        const matchGsm = !order.gsm || !reel.gsm || Math.abs(reel.gsm - order.gsm) <= 2;
+        const reachedLimit = orderWeightKg > 0 ? (dispatchedWeight >= orderWeightKg) : (dispatchedCount >= orderQty);
+
+        if (matchFamily && matchGsm && !reachedLimit) {
+          dispatchedCount++;
+          dispatchedWeight += (reel.weight || 1250);
+          allocatedReelNos.add(reel.reelNo);
+        }
+      });
+    }
+
+    let newStatus: PendingOrder['status'] = 'PENDING';
+    if (orderWeightKg > 0) {
+      if (dispatchedWeight >= orderWeightKg - 50) { // allow small margin for discrete reel weights
+        newStatus = 'COMPLETED';
+      } else if (dispatchedWeight > 0) {
+        newStatus = 'PARTIAL';
+      } else {
+        newStatus = 'PENDING';
+      }
+    } else {
+      if (dispatchedCount >= orderQty) {
+        newStatus = 'COMPLETED';
+      } else if (dispatchedCount > 0) {
+        newStatus = 'PARTIAL';
+      } else {
+        newStatus = 'PENDING';
+      }
+    }
+
+    return {
+      ...order,
+      dispatchedQty: dispatchedCount,
+      status: newStatus,
+    };
+  });
+
+  setJSON(KEYS.PENDING_ORDERS, updatedOrders, false);
+  pushUpsertToCloud('pending_orders', updatedOrders.map(pendingOrderToDb));
+  return updatedOrders;
+}
+
+export function getPendingOrders(): PendingOrder[] {
+  const existing = getJSON<PendingOrder[]>(KEYS.PENDING_ORDERS, []);
+  if (!existing || existing.length === 0) {
+    return [];
+  }
+  return syncOrdersWithDispatches();
+}
+
+export function getNextOrderNo(): string {
+  const orders = getPendingOrders();
+  let maxNum = 0;
+  orders.forEach(o => {
+    const trimmed = (o.orderNo || '').trim();
+    const match = trimmed.match(/^ORD-(\d+)$/i) || trimmed.match(/(\d+)$/);
+    if (match) {
+      const n = parseInt(match[1], 10);
+      if (!isNaN(n) && n < 50000 && n > maxNum) {
+        maxNum = n;
+      }
+    }
+  });
+  const next = maxNum > 0 ? maxNum + 1 : (orders.length > 0 ? orders.length + 1 : 1);
+  return `ORD-${String(next).padStart(3, '0')}`;
+}
+
+export function savePendingOrder(order: PendingOrder, user: string): PendingOrder {
+  const orders = getPendingOrders();
+  const existingIndex = orders.findIndex(o => o.id === order.id);
+  if (existingIndex > -1) {
+    orders[existingIndex] = order;
+  } else {
+    orders.push(order);
+  }
+  setJSON(KEYS.PENDING_ORDERS, orders);
+  pushUpsertToCloud('pending_orders', pendingOrderToDb(order));
+  return order;
+}
+
+// --- PACKING SLIPS & DISPATCH ---
+const DEFAULT_PACKING_SLIPS: PackingSlip[] = [];
+
+export function getPackingSlips(): PackingSlip[] {
+  const existing = getJSON<PackingSlip[]>(KEYS.PACKING_SLIPS, []);
+  if (!existing || existing.length === 0) {
+    return [];
+  }
+  let modified = false;
+  const normalized = existing.map(s => {
+    const raw = (s.slipNo || '').trim();
+    if (/^\d+$/.test(raw)) {
+      modified = true;
+      return { ...s, slipNo: `PS-${raw}` };
+    }
+    if (raw.toUpperCase().startsWith('CHALLAN-')) {
+      modified = true;
+      const after = raw.substring('CHALLAN-'.length);
+      const match = after.match(/-(\d+)$/);
+      const cleanNum = match ? (match[1].replace(/^0+/, '') || match[1]) : after;
+      return { ...s, slipNo: `PS-${cleanNum}` };
+    }
+    return s;
+  });
+  if (modified) {
+    setJSON(KEYS.PACKING_SLIPS, normalized);
+    pushUpsertToCloud('packing_slips', normalized.map(packingSlipToDb));
+  }
+  return normalized;
+}
+
+export function getNextPackingSlipNo(): string {
+  const slips = getPackingSlips();
+  let maxNum = 0;
+  slips.forEach(s => {
+    const trimmed = (s.slipNo || '').trim();
+    const match = trimmed.match(/^PS-(\d+)$/i) || trimmed.match(/(\d+)$/);
+    if (match) {
+      const n = parseInt(match[1], 10);
+      if (!isNaN(n) && n < 50000 && n > maxNum) {
+        maxNum = n;
+      }
+    }
+  });
+  const next = maxNum > 0 ? maxNum + 1 : (slips.length > 0 ? slips.length + 1 : 1);
+  return `PS-${next}`;
+}
+
+export function savePackingSlip(slip: PackingSlip, user: string): PackingSlip {
+  const slips = getPackingSlips();
+  const existingIndex = slips.findIndex(s => s.id === slip.id);
+  const reels = getReels();
+  let reelsChanged = false;
+
+  const isMatch = (a: string, b: string) => (a || '').trim().toUpperCase() === (b || '').trim().toUpperCase();
+
+  const parties = getParties();
+  const vehicles = getVehicles();
+  const party = parties.find(p => p.id === slip.partyId || isMatch(p.name, slip.partyId));
+  const vehicle = vehicles.find(v => v.id === slip.vehicleId || isMatch(v.vehicleNo, slip.vehicleId));
+  const partyName = party ? party.name : (slip.partyId || 'Customer');
+  const vehicleNo = vehicle ? vehicle.vehicleNo : (slip.vehicleId || 'Truck');
+  const dispatchDate = slip.date || new Date().toISOString().substring(0, 10);
+
+  if (existingIndex > -1) {
+    const oldSlip = slips[existingIndex];
+    slips[existingIndex] = slip;
+
+    // If the slip is or was DISPATCHED / CONFIRMED, handle added/removed reels
+    const wasDispatched = oldSlip.status === 'DISPATCHED' || oldSlip.status === 'CONFIRMED';
+    const isNowDispatched = slip.status === 'DISPATCHED' || slip.status === 'CONFIRMED';
+
+    if (wasDispatched || isNowDispatched) {
+      // 1. Removed reels (was in old slip, not in new slip) -> Restore to in stock
+      (oldSlip.reelNos || []).forEach(rNo => {
+        const stillPresent = (slip.reelNos || []).some(n => isMatch(n, rNo));
+        if (!stillPresent) {
+          const reel = reels.find(r => isMatch(r.reelNo, rNo));
+          if (reel) {
+            const grade = (reel.qcGrade || 'A').toUpperCase();
+            reel.status = grade === 'B' ? 'IN_STOCK_B' : 'IN_STOCK';
+            delete reel.dispatchDetails;
+            reelsChanged = true;
+          }
+        }
+      });
+
+      // 2. Added reels (in new slip, was not in old slip) -> Mark dispatched
+      if (isNowDispatched) {
+        (slip.reelNos || []).forEach(rNo => {
+          const cleanNo = (rNo || '').trim();
+          if (!cleanNo) return;
+          const reel = reels.find(r => isMatch(r.reelNo, cleanNo));
+          if (reel) {
+            reel.status = 'DISPATCHED';
+            reel.dispatchDetails = {
+              partyName,
+              vehicleNo,
+              dispatchDate,
+              packingSlipNo: slip.slipNo,
+            };
+            reelsChanged = true;
+          } else {
+            // Auto-register reel if not yet existing
+            reels.push({
+              reelNo: cleanNo,
+              parentRollNo: '',
+              product: 'Paper Reel',
+              weight: 0,
+              dia: 0,
+              gsm: 0,
+              size: 0,
+              ply: 1,
+              joint: 0,
+              status: 'DISPATCHED',
+              qcGrade: 'A',
+              productionDate: dispatchDate,
+              dispatchDetails: {
+                partyName,
+                vehicleNo,
+                dispatchDate,
+                packingSlipNo: slip.slipNo,
+              },
+            });
+            reelsChanged = true;
+          }
+        });
+      }
+    }
+  } else {
+    slips.push(slip);
+    const isNowDispatched = slip.status === 'DISPATCHED' || slip.status === 'CONFIRMED';
+    if (isNowDispatched && slip.reelNos && slip.reelNos.length > 0) {
+      slip.reelNos.forEach(rNo => {
+        const cleanNo = (rNo || '').trim();
+        if (!cleanNo) return;
+        const reel = reels.find(r => isMatch(r.reelNo, cleanNo));
+        if (reel) {
+          reel.status = 'DISPATCHED';
+          reel.dispatchDetails = {
+            partyName,
+            vehicleNo,
+            dispatchDate,
+            packingSlipNo: slip.slipNo,
+          };
+          reelsChanged = true;
+        } else {
+          // Auto-register reel if not yet existing
+          reels.push({
+            reelNo: cleanNo,
+            parentRollNo: '',
+            product: 'Paper Reel',
+            weight: 0,
+            dia: 0,
+            gsm: 0,
+            size: 0,
+            ply: 1,
+            joint: 0,
+            status: 'DISPATCHED',
+            qcGrade: 'A',
+            productionDate: dispatchDate,
+            dispatchDetails: {
+              partyName,
+              vehicleNo,
+              dispatchDate,
+              packingSlipNo: slip.slipNo,
+            },
+          });
+          reelsChanged = true;
+        }
+      });
+    }
+  }
+
+  if (reelsChanged) {
+    setJSON(KEYS.REELS, reels);
+    pushUpsertToCloud('reels', reels.map(reelToDb));
+  }
+
+  setJSON(KEYS.PACKING_SLIPS, slips);
+  pushUpsertToCloud('packing_slips', packingSlipToDb(slip));
+
+  // Automatically recalculate and sync pending orders
+  syncOrdersWithDispatches();
+
+  addLog(
+    'Dispatch',
+    'Packing Slip Saved',
+    `Packing slip #${slip.slipNo} saved with status ${slip.status}. Reels count: ${slip.reelNos.length}`,
+    user
+  );
+  return slip;
+}
+
+export function deletePackingSlip(slipId: string, user: string): boolean {
+  const slips = getPackingSlips();
+  const isMatch = (a: string, b: string) => (a || '').trim().toUpperCase() === (b || '').trim().toUpperCase();
+  const slipIndex = slips.findIndex(s => s.id === slipId || isMatch(s.slipNo, slipId));
+  if (slipIndex === -1) return false;
+
+  const slip = slips[slipIndex];
+  const reels = getReels();
+  let reelsChanged = false;
+
+  // If the slip had linked reels, restore their status back to in-stock
+  if (slip.reelNos && slip.reelNos.length > 0) {
+    slip.reelNos.forEach(rNo => {
+      const reel = reels.find(r => isMatch(r.reelNo, rNo));
+      if (reel) {
+        const grade = (reel.qcGrade || 'A').toUpperCase();
+        reel.status = grade === 'B' ? 'IN_STOCK_B' : 'IN_STOCK';
+        delete reel.dispatchDetails;
+        reelsChanged = true;
+      }
+    });
+    if (reelsChanged) {
+      setJSON(KEYS.REELS, reels);
+      pushUpsertToCloud('reels', reels.map(reelToDb));
+    }
+  }
+
+  slips.splice(slipIndex, 1);
+  setJSON(KEYS.PACKING_SLIPS, slips);
+  pushDeleteToCloud('packing_slips', 'id', slip.id);
+
+  // Recalculate pending orders
+  syncOrdersWithDispatches();
+
+  addLog(
+    'Dispatch',
+    'Challan Deleted',
+    `Delivery Challan #${slip.slipNo} was deleted. Associated ${slip.reelNos.length} reels restored to stock.`,
+    user
+  );
+  return true;
+}
+
+export function clearAllPackingSlips(user: string = 'Admin'): void {
+  const slips = getPackingSlips();
+  const reels = getReels();
+  let reelsChanged = false;
+
+  const isMatch = (a: string, b: string) => (a || '').trim().toUpperCase() === (b || '').trim().toUpperCase();
+
+  slips.forEach(slip => {
+    if (slip.reelNos && slip.reelNos.length > 0) {
+      slip.reelNos.forEach(rNo => {
+        const reel = reels.find(r => isMatch(r.reelNo, rNo));
+        if (reel) {
+          const grade = (reel.qcGrade || 'A').toUpperCase();
+          reel.status = grade === 'B' ? 'IN_STOCK_B' : 'IN_STOCK';
+          delete reel.dispatchDetails;
+          reelsChanged = true;
+        }
+      });
+    }
+  });
+
+  if (reelsChanged) {
+    setJSON(KEYS.REELS, reels);
+    pushUpsertToCloud('reels', reels.map(reelToDb));
+  }
+
+  setJSON(KEYS.PACKING_SLIPS, []);
+  pushClearTableToCloud('packing_slips');
+  notifyDataUpdated();
+
+  addLog(
+    'Dispatch',
+    'All Challans Cleared',
+    `All ${slips.length} delivery challans were cleared and reset to 0 by ${user}.`,
+    user
+  );
+}
+
+export function confirmDispatch(slipId: string, user: string): void {
+  const slips = getPackingSlips();
+  const isMatch = (a: string, b: string) => (a || '').trim().toUpperCase() === (b || '').trim().toUpperCase();
+  let slip = slips.find(s => s.id === slipId || isMatch(s.slipNo, slipId));
+  if (!slip) {
+    throw new Error('Packing Slip not found');
+  }
+
+  const reels = getReels();
+  const parties = getParties();
+  const vehicles = getVehicles();
+
+  const party = parties.find(p => p.id === slip!.partyId || isMatch(p.name, slip!.partyId));
+  const vehicle = vehicles.find(v => v.id === slip!.vehicleId || isMatch(v.vehicleNo, slip!.vehicleId));
+
+  const partyName = party ? party.name : (slip.partyId || 'Unknown Party');
+  const vehicleNo = vehicle ? vehicle.vehicleNo : (slip.vehicleId || 'Unknown Vehicle');
+  const dispatchDate = slip.date || new Date().toISOString().substring(0, 10);
+
+  let reelsChanged = false;
+
+  // Atomically perform status update and decrement finished stock counts
+  (slip.reelNos || []).forEach(rNo => {
+    const cleanNo = (rNo || '').trim();
+    if (!cleanNo) return;
+    const reel = reels.find(r => isMatch(r.reelNo, cleanNo));
+    if (reel) {
+      reel.status = 'DISPATCHED';
+      reel.dispatchDetails = {
+        partyName,
+        vehicleNo,
+        dispatchDate,
+        packingSlipNo: slip!.slipNo,
+      };
+      reelsChanged = true;
+
+      addLog(
+        'Dispatch',
+        'Reel Dispatched',
+        `Reel ${cleanNo} dispatched to ${partyName} on vehicle ${vehicleNo} under Challan #${slip!.slipNo}`,
+        user
+      );
+    } else {
+      // Auto-create reel as dispatched if not found
+      reels.push({
+        reelNo: cleanNo,
+        parentRollNo: '',
+        product: 'Paper Reel',
+        weight: 0,
+        dia: 0,
+        gsm: 0,
+        size: 0,
+        ply: 1,
+        joint: 0,
+        status: 'DISPATCHED',
+        qcGrade: 'A',
+        productionDate: dispatchDate,
+        dispatchDetails: {
+          partyName,
+          vehicleNo,
+          dispatchDate,
+          packingSlipNo: slip!.slipNo,
+        },
+      });
+      reelsChanged = true;
+    }
+  });
+
+  slip.status = 'DISPATCHED';
+
+  if (reelsChanged) {
+    setJSON(KEYS.REELS, reels);
+    pushUpsertToCloud('reels', reels.map(reelToDb));
+  }
+
+  setJSON(KEYS.PACKING_SLIPS, slips);
+  pushUpsertToCloud('packing_slips', packingSlipToDb(slip));
+
+  // Dynamic sync for all pending orders
+  syncOrdersWithDispatches();
+
+  addLog(
+    'Dispatch',
+    'Dispatch Finalized',
+    `Finalized dispatch Challan #${slip.slipNo}. Stock decremented by ${slip.reelNos.length} reels.`,
+    user
+  );
+}
+
+// --- STORE INVENTORY ---
+export function getStoreItems(): StoreItem[] {
+  const items = getJSON<StoreItem[]>(KEYS.STORE_ITEMS, []);
+  if (!items) return [];
+  return items.filter(i => (i as any).active !== false);
+}
+
+export function saveStoreItem(item: StoreItem, user: string): StoreItem {
+  const items = getJSON<StoreItem[]>(KEYS.STORE_ITEMS, []);
+  const existingIndex = items.findIndex(i => i.id === item.id);
+  const isNew = existingIndex === -1;
+  const prevItem = !isNew ? items[existingIndex] : null;
+
+  if (!isNew) {
+    items[existingIndex] = item;
+  } else {
+    items.push(item);
+  }
+  setJSON(KEYS.STORE_ITEMS, items);
+  pushDeleteToCloud('deleted_store_items', 'id', item.id);
+  pushUpsertToCloud('store_items', storeItemToDb(item));
+
+  // Record audit log
+  if (isNew) {
+    addStoreActivityLog({
+      action: 'ADD',
+      itemType: item.type,
+      itemName: item.name,
+      itemId: item.id,
+      quantityChanged: item.pcs,
+      previousPcs: 0,
+      newPcs: item.pcs,
+      machineLocation: item.type === 'BEARING' ? item.usageArea : item.targetMachine,
+      operatorName: user,
+      reason: 'New spare item registered in store ledger',
+      details: `Added new ${item.type === 'BEARING' ? 'Bearing' : 'V-Belt'} "${item.name}" with initial stock of ${item.pcs} pcs`,
+    });
+  } else if (prevItem) {
+    const diff = item.pcs - prevItem.pcs;
+    addStoreActivityLog({
+      action: diff !== 0 ? 'ADJUST' : 'EDIT',
+      itemType: item.type,
+      itemName: item.name,
+      itemId: item.id,
+      quantityChanged: diff,
+      previousPcs: prevItem.pcs,
+      newPcs: item.pcs,
+      machineLocation: item.type === 'BEARING' ? item.usageArea : item.targetMachine,
+      operatorName: user,
+      reason: 'Item specifications or stock updated',
+      details: `Updated ${item.type === 'BEARING' ? 'Bearing' : 'V-Belt'} "${item.name}". Stock: ${prevItem.pcs} -> ${item.pcs} pcs (${diff >= 0 ? `+${diff}` : diff} pcs)`,
+    });
+  }
+
+  notifyDataUpdated('store_items');
+  return item;
+}
+
+export function adjustStoreItemStock(id: string, amount: number, user: string): boolean {
+  const items = getJSON<StoreItem[]>(KEYS.STORE_ITEMS, []);
+  const item = items.find(i => i.id === id);
+  if (item) {
+    const prevPcs = item.pcs;
+    item.pcs = Math.max(0, item.pcs + amount);
+    setJSON(KEYS.STORE_ITEMS, items);
+    pushUpsertToCloud('store_items', storeItemToDb(item));
+    addStoreActivityLog({
+      action: amount >= 0 ? 'STOCK_IN' : 'STOCK_OUT',
+      itemType: item.type,
+      itemName: item.name,
+      itemId: item.id,
+      quantityChanged: amount,
+      previousPcs: prevPcs,
+      newPcs: item.pcs,
+      machineLocation: item.type === 'BEARING' ? item.usageArea : item.targetMachine,
+      operatorName: user,
+      reason: amount >= 0 ? 'Manual Stock Restock' : 'Manual Stock Adjustment',
+      details: `Adjusted stock by ${amount >= 0 ? `+${amount}` : amount} pcs. Stock: ${prevPcs} -> ${item.pcs} pcs`,
+    });
+    notifyDataUpdated('store_items');
+    return true;
+  }
+  return false;
+}
+
+export function deleteStoreItem(id: string, user: string = 'Admin'): void {
+  const items = getJSON<StoreItem[]>(KEYS.STORE_ITEMS, []);
+  const target = items.find(i => i.id === id);
+  const updated = items.filter(i => i.id !== id);
+  setJSON(KEYS.STORE_ITEMS, updated);
+  pushUpsertToCloud('deleted_store_items', { id, deleted_at: new Date().toISOString() });
+  pushDeleteToCloud('store_items', 'id', id);
+  if (target) {
+    addStoreActivityLog({
+      action: 'DELETE',
+      itemType: target.type,
+      itemName: target.name,
+      itemId: target.id,
+      quantityChanged: -(target.pcs || 0),
+      previousPcs: target.pcs || 0,
+      newPcs: 0,
+      machineLocation: target.type === 'BEARING' ? target.usageArea : target.targetMachine,
+      operatorName: user,
+      reason: 'Item removed from store inventory',
+      details: `Deleted ${target.type === 'BEARING' ? 'Bearing' : 'V-Belt'} "${target.name}" (${target.pcs} pcs)`,
+    });
+  }
+  notifyDataUpdated('store_items');
+}
+
+// --- STORE ACTIVITY & AUDIT LOGS ---
+export function getStoreActivityLogs(): StoreActivityLog[] {
+  const logs = getJSON<StoreActivityLog[]>(KEYS.STORE_LOGS, []);
+  if (!logs) return [];
+  return logs.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+}
+
+export function addStoreActivityLog(logData: {
+  action: 'ADD' | 'EDIT' | 'DELETE' | 'STOCK_IN' | 'STOCK_OUT' | 'ADJUST';
+  itemType: 'BEARING' | 'V_BELT';
+  itemName: string;
+  itemId?: string;
+  quantityChanged?: number;
+  previousPcs?: number;
+  newPcs?: number;
+  machineLocation?: string;
+  operatorName: string;
+  reason?: string;
+  referenceNo?: string;
+  details: string;
+}): StoreActivityLog {
+  const now = new Date();
+  const dateStr = now.toISOString().split('T')[0];
+  const timeStr = now.toTimeString().slice(0, 5);
+
+  const log: StoreActivityLog = {
+    id: `SLOG-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    timestamp: now.toISOString(),
+    date: dateStr,
+    time: timeStr,
+    ...logData,
+  };
+
+  const logs = getStoreActivityLogs();
+  logs.unshift(log);
+  if (logs.length > 1000) {
+    logs.length = 1000;
+  }
+  setJSON(KEYS.STORE_LOGS, logs);
+
+  addLog(
+    'Store Spares',
+    `Spares ${log.action}`,
+    `${log.itemType} "${log.itemName}" | ${log.details} | Loc: ${log.machineLocation || 'General'} | Op: ${log.operatorName}`,
+    log.operatorName
+  );
+
+  notifyDataUpdated('store_items');
+  return log;
+}
+
+export function logSparesMovement(params: {
+  itemId: string;
+  action: 'STOCK_IN' | 'STOCK_OUT';
+  quantity: number;
+  machineLocation?: string;
+  operatorName: string;
+  reason?: string;
+  referenceNo?: string;
+  user: string;
+}): { success: boolean; log?: StoreActivityLog; error?: string } {
+  const items = getJSON<StoreItem[]>(KEYS.STORE_ITEMS, []);
+  const item = items.find(i => i.id === params.itemId);
+  if (!item) {
+    return { success: false, error: 'Item not found in spares store.' };
+  }
+
+  const prevPcs = item.pcs || 0;
+  let newPcs = prevPcs;
+  const qty = Math.max(1, Math.floor(params.quantity));
+
+  if (params.action === 'STOCK_OUT') {
+    if (prevPcs < qty) {
+      return {
+        success: false,
+        error: `Insufficient stock! Current stock is ${prevPcs} pcs, but attempted to issue ${qty} pcs.`,
+      };
+    }
+    newPcs = prevPcs - qty;
+  } else {
+    newPcs = prevPcs + qty;
+  }
+
+  item.pcs = newPcs;
+  setJSON(KEYS.STORE_ITEMS, items);
+  pushUpsertToCloud('store_items', storeItemToDb(item));
+
+  const actionLabel = params.action === 'STOCK_OUT' ? 'Issued' : 'Received / Restocked';
+  const qtyPrefix = params.action === 'STOCK_OUT' ? `-${qty}` : `+${qty}`;
+  const details = `${actionLabel} ${qty} pcs. Stock changed from ${prevPcs} to ${newPcs} pcs.`;
+
+  const log = addStoreActivityLog({
+    action: params.action,
+    itemType: item.type,
+    itemName: item.name,
+    itemId: item.id,
+    quantityChanged: params.action === 'STOCK_OUT' ? -qty : qty,
+    previousPcs: prevPcs,
+    newPcs,
+    machineLocation: params.machineLocation || (item.type === 'BEARING' ? item.usageArea : item.targetMachine) || 'General Plant Machine',
+    operatorName: params.operatorName || params.user || 'Store Operator',
+    reason: params.reason || '-',
+    referenceNo: params.referenceNo || '-',
+    details,
+  });
+
+  notifyDataUpdated('store_items');
+  return { success: true, log };
+}
+
+// --- BACKUP & RESTORE ---
+export function exportBackup(): string {
+  const backup: Record<string, any> = {};
+  Object.entries(KEYS).forEach(([_, storageKey]) => {
+    const value = localStorage.getItem(storageKey);
+    if (value) {
+      backup[storageKey] = JSON.parse(value);
+    }
+  });
+  return JSON.stringify(backup, null, 2);
+}
+
+export function restoreBackup(backupJson: string, user: string): void {
+  try {
+    const data = JSON.parse(backupJson);
+    if (!data[KEYS.USERS] || !data[KEYS.RAW_MATERIALS]) {
+      throw new Error('Invalid backup file content: missing core tables.');
+    }
+
+    Object.entries(KEYS).forEach(([_, storageKey]) => {
+      if (data[storageKey]) {
+        localStorage.setItem(storageKey, JSON.stringify(data[storageKey]));
+      }
+    });
+
+    addLog('Admin', 'Backup Restored', 'Full database restored from file backup', user);
+  } catch (err: any) {
+    throw new Error('Failed to restore backup: ' + err.message);
+  }
+}
+
+export async function performFactoryReset(): Promise<void> {
+  // 1. Wipe cloud data across all tables directly in Supabase
+  const cloudTables = [
+    'raw_materials', 'raw_material_lots', 'products', 'parties', 'vendors',
+    'vehicles', 'pulp_formulas', 'machine_rolls', 'reels', 'transaction_logs',
+    'boiler_logs', 'etp_logs', 'electricity_logs', 'pending_orders',
+    'packing_slips', 'store_items', 'paper_test_reports'
+  ];
+  await Promise.allSettled(cloudTables.map(tbl => pushClearTableToCloud(tbl)));
+
+  // 2. Wipe all localStorage items completely
+  localStorage.clear();
+
+  // 3. Set default Admin user with plain 4-digit PIN
+  const adminUser: User = {
+    username: 'admin',
+    role: 'Admin',
+    roles: ['Admin'],
+    pin: '1234',
+    displayName: 'Saheb Paper Admin',
+    email: 'sahebpaper@gmail.com',
+    phone: '8000563666',
+    securityQuestion: 'What is your favorite color?',
+    securityAnswer: 'blue',
+    empId: 'EMP-001',
+    designation: 'Admin / Owner',
+    customModules: [
+      'dashboard', 'raw_material_stock', 'pulp_mill_operations', 'machine_production', 'rewinding_reel_conversion', 'lab',
+      'boiler', 'etp', 'electricity', 'orders', 'finished_stock_dispatch', 'dispatch', 'spareparts_management', 'label_studio', 'monthly_yearly_reporting'
+    ],
+    active: true
+  };
+
+  setJSON(KEYS.USERS, [adminUser], false);
+  setJSON(KEYS.RAW_MATERIALS, [], false);
+  setJSON(KEYS.PRODUCTS, [], false);
+  setJSON(KEYS.PARTIES, [], false);
+  setJSON(KEYS.VENDORS, [], false);
+  setJSON(KEYS.VEHICLES, [], false);
+  setJSON(KEYS.FORMULAS, [], false);
+  setJSON(KEYS.ROLLS, [], false);
+  setJSON(KEYS.REELS, [], false);
+  setJSON(KEYS.LOGS, [], false);
+  setJSON(KEYS.BOILER_LOGS, [], false);
+  setJSON(KEYS.ETP_LOGS, [], false);
+  setJSON(KEYS.ELECTRICITY_LOGS, [], false);
+  setJSON(KEYS.PENDING_ORDERS, [], false);
+  setJSON(KEYS.PACKING_SLIPS, [], false);
+  setJSON(KEYS.STORE_ITEMS, [], false);
+  setJSON(KEYS.RAW_MATERIAL_LOTS, [], false);
+  setJSON(KEYS.LAB_REPORTS, [], false);
+
+  // 4. Keep active session as Admin and establish production baseline
+  const adminSession = {
+    token: `token_${Date.now()}_admin`,
+    user: adminUser,
+    expiresAt: Date.now() + 8 * 60 * 60 * 1000,
+  };
+  localStorage.setItem('saheb_session', JSON.stringify(adminSession));
+  localStorage.setItem('saheb_active_user', JSON.stringify(adminUser));
+  localStorage.setItem('saheb_production_ready', 'true');
+  localStorage.setItem('saheb_clean_production_zero_v4', 'true');
+  localStorage.setItem('saheb_installed_version_code', '14');
+  localStorage.setItem('saheb_installed_version_name', 'Beta 1.8');
+}
+
+export function clearAllOperationalData(): void {
+  performFactoryReset();
+}
+export const clearAllDemoData = clearAllOperationalData;
+
+export function deleteProduct(id: string, user: string = 'Admin'): void {
+  const products = getProducts();
+  const target = products.find(p => p.id === id);
+  if (target) {
+    target.active = false;
+    setJSON(KEYS.PRODUCTS, products);
+    pushUpsertToCloud('products', productToDb(target));
+    notifyDataUpdated('products');
+    addLog('Admin', 'Product Deleted', `Deleted product "${target.name}" (${target.gsm} GSM, ${target.size} mm)`, user);
+  }
+}
+
+export function getActiveProducts(): ProductItem[] {
+  return getProducts().filter(p => p.active !== false);
+}
+
+export function deleteParty(id: string, user: string = 'Admin'): void {
+  const parties = getParties();
+  const target = parties.find(p => p.id === id);
+  if (target) {
+    target.active = false;
+    setJSON(KEYS.PARTIES, parties);
+    pushUpsertToCloud('parties', partyToDb(target));
+    notifyDataUpdated('parties');
+    addLog('Admin', 'Party Deleted', `Deleted customer party "${target.name}"`, user);
+  }
+}
+
+export function getActiveParties(): PartyItem[] {
+  return getParties().filter(p => p.active !== false);
+}
+
+export function deleteVendor(id: string, user: string = 'Admin'): void {
+  const vendors = getVendors();
+  const target = vendors.find(v => v.id === id);
+  if (target) {
+    target.active = false;
+    setJSON(KEYS.VENDORS, vendors);
+    pushUpsertToCloud('vendors', vendorToDb(target));
+    notifyDataUpdated('vendors');
+    addLog('Admin', 'Vendor Deleted', `Deleted supplier vendor "${target.name}"`, user);
+  }
+}
+
+export function getActiveVendors(): VendorItem[] {
+  return getVendors().filter(v => v.active !== false);
+}
+
+export function deleteVehicle(id: string, user: string = 'Admin'): void {
+  const vehicles = getVehicles();
+  const target = vehicles.find(v => v.id === id);
+  if (target) {
+    target.active = false;
+    setJSON(KEYS.VEHICLES, vehicles);
+    pushUpsertToCloud('vehicles', vehicleToDb(target));
+    notifyDataUpdated('vehicles');
+    addLog('Admin', 'Vehicle Deleted', `Deleted vehicle "${target.vehicleNo}" (${target.driverName})`, user);
+  }
+}
+
+export function getActiveVehicles(): VehicleItem[] {
+  return getVehicles().filter(v => v.active !== false);
+}
+
+// --- LAB QUALITY REPORTS ---
+export function getLabReports(): PaperTestReport[] {
+  return getJSON<PaperTestReport[]>(KEYS.LAB_REPORTS, []);
+}
+
+export function saveLabReport(report: PaperTestReport, user: string): PaperTestReport {
+  const reports = getLabReports();
+  const index = reports.findIndex(r => r.id === report.id || (r.rollNo === report.rollNo && r.date === report.date));
+  if (index > -1) {
+    reports[index] = report;
+  } else {
+    reports.unshift(report);
+  }
+  setJSON(KEYS.LAB_REPORTS, reports);
+  pushUpsertToCloud('paper_test_reports', labReportToDb(report));
+  addLog('Lab QC', 'Paper Test Report Saved', `Lab Test Report #${report.id} saved for Roll #${report.rollNo} (${report.product})`, user);
+  return report;
+}
+
+export function deleteLabReport(id: string, user: string): void {
+  const reports = getLabReports();
+  const updated = reports.filter(r => r.id !== id);
+  setJSON(KEYS.LAB_REPORTS, updated);
+  pushDeleteToCloud('paper_test_reports', 'id', id);
+  addLog('Lab QC', 'Paper Test Report Deleted', `Lab Test Report #${id} deleted`, user);
+}
+
+export function deleteUser(username: string, operator: string = 'Admin'): void {
+  const users = getUsers();
+  const target = users.find(u => u.username === username);
+  const updated = users.filter(u => u.username !== username);
+  setJSON(KEYS.USERS, updated);
+  pushDeleteToCloud('users', 'username', username);
+  notifyDataUpdated('users');
+  addLog('Admin', 'User Deleted', `User account @${username} (${target?.displayName || 'User'}) deleted by ${operator}`, operator);
+}

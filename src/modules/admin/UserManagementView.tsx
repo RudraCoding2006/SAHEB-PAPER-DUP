@@ -1,0 +1,1648 @@
+import React, { useState, useMemo, useEffect } from 'react';
+import { Navigate } from 'react-router-dom';
+import { useAuth, getFirstAccessibleRoute } from '../auth/AuthContext';
+import {
+  getUsers,
+  saveUser,
+  deactivateUser,
+  addLog,
+  deleteUser,
+  unlockUserAccount,
+  getAccountLockInfo,
+  getCustomRoles,
+  getDeletedRoleKeys,
+  saveCustomRole,
+  deleteRole,
+} from '../../data/index';
+import { isPinHashed, revealPin } from '../../lib/security';
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock';
+import { useMobileBackHandler } from '../../hooks/useMobileBackHandler';
+import type { User, UserRole, CustomRole } from '../../data/types';
+import { getDefaultModulesForRoles } from '../../data/types';
+import {
+  Users,
+  Plus,
+  Shield,
+  ShieldAlert,
+  Search,
+  UserCheck,
+  UserX,
+  X,
+  Pencil,
+  Trash2,
+  CheckCircle2,
+  Eye,
+  EyeOff,
+  Save,
+  Check,
+  User as UserIcon,
+  AtSign,
+  Phone,
+  Lock,
+  Building2,
+  FlaskConical,
+  ShoppingCart,
+  Truck,
+  Package,
+  Cog,
+  Info,
+  UserPlus,
+  LogOut,
+  Crown,
+  KeyRound,
+  RotateCw,
+  Flame,
+  Droplet,
+  Warehouse,
+  Factory,
+  Tag,
+  Sparkles,
+  Zap,
+  Calculator,
+  ClipboardCheck,
+  Wrench,
+  ShieldCheck,
+  Award,
+  Layers,
+  Settings,
+  AlertTriangle,
+} from 'lucide-react';
+
+interface MasterRoleItem {
+  key: UserRole;
+  label: string;
+  desc: string;
+  icon: React.ComponentType<{ className?: string }>;
+}
+
+export const getRoleIcon = (roleName: string): React.ComponentType<{ className?: string }> => {
+  const name = (roleName || '').toLowerCase().trim();
+  
+  if (name.includes('lab') || name.includes('quality') || name.includes('qc') || name.includes('test') || name.includes('sample') || name.includes('chemist')) {
+    return FlaskConical;
+  }
+  if (name.includes('pulper') || name.includes('pulp') || name.includes('mill') || name.includes('beater') || name.includes('hydrapulper')) {
+    return Building2;
+  }
+  if (name.includes('paper') || name.includes('machine') || name.includes('machinery') || name.includes('press') || name.includes('plant')) {
+    return Cog;
+  }
+  if (name.includes('rewind') || name.includes('reel') || name.includes('roll') || name.includes('slitter') || name.includes('cutter') || name.includes('trim') || name.includes('conversion')) {
+    return RotateCw;
+  }
+  if (name.includes('boiler') || name.includes('steam') || name.includes('fire') || name.includes('fuel') || name.includes('heat') || name.includes('thermal') || name.includes('coal')) {
+    return Flame;
+  }
+  if (name.includes('etp') || name.includes('water') || name.includes('effluent') || name.includes('treatment') || name.includes('liquid') || name.includes('pump') || name.includes('stp')) {
+    return Droplet;
+  }
+  if (name.includes('dispatch') || name.includes('truck') || name.includes('transport') || name.includes('delivery') || name.includes('gatepass') || name.includes('driver') || name.includes('logistics') || name.includes('loading')) {
+    return Truck;
+  }
+  if (name.includes('warehouse') || name.includes('godown') || name.includes('storage') || name.includes('finished')) {
+    return Warehouse;
+  }
+  if (name.includes('store') || name.includes('spare') || name.includes('spares') || name.includes('part') || name.includes('parts') || name.includes('hardware') || name.includes('inventory')) {
+    return Package;
+  }
+  if (name.includes('shop') || name.includes('purchase') || name.includes('buy') || name.includes('procure') || name.includes('shopper') || name.includes('vendor')) {
+    return ShoppingCart;
+  }
+  if (name.includes('view') || name.includes('viewer') || name.includes('observer') || name.includes('monitor') || name.includes('display')) {
+    return Eye;
+  }
+  if (name.includes('admin') || name.includes('owner') || name.includes('boss') || name.includes('director') || name.includes('founder') || name.includes('head')) {
+    return Crown;
+  }
+  if (name.includes('electric') || name.includes('power') || name.includes('grid') || name.includes('wire') || name.includes('energy') || name.includes('dg') || name.includes('voltage')) {
+    return Zap;
+  }
+  if (name.includes('account') || name.includes('finance') || name.includes('bill') || name.includes('gst') || name.includes('tally') || name.includes('cash') || name.includes('tax')) {
+    return Calculator;
+  }
+  if (name.includes('audit') || name.includes('inspect') || name.includes('check') || name.includes('iso') || name.includes('compliance')) {
+    return ClipboardCheck;
+  }
+  if (name.includes('mechanic') || name.includes('maint') || name.includes('repair') || name.includes('tech') || name.includes('fitter') || name.includes('service') || name.includes('engineer')) {
+    return Wrench;
+  }
+  if (name.includes('manager') || name.includes('supervisor') || name.includes('incharge') || name.includes('lead') || name.includes('officer') || name.includes('executive')) {
+    return ShieldCheck;
+  }
+  return Tag;
+};
+
+
+const MASTER_ROLES: MasterRoleItem[] = [
+  { key: 'Admin', label: 'Admin Owner', desc: 'Full Master System Control', icon: Shield },
+  { key: 'PlantManager', label: 'Plant Manager', desc: 'Plant & Operations Management', icon: ShieldCheck },
+  { key: 'LabOperator', label: 'Lab Quality Control', desc: 'Paper Quality & Lab Testing', icon: FlaskConical },
+  { key: 'PulpOperator', label: 'Pulper', desc: 'Pulper & Pulp Mill Operations', icon: Factory },
+  { key: 'MachineOperator', label: 'Paper Machine', desc: 'Paper Machine & Roll Production', icon: Cog },
+  { key: 'RewinderOperator', label: 'Rewinder', desc: 'Reel Conversion & QR Tagging', icon: RotateCw },
+  { key: 'UtilitiesEtpOperator', label: 'Utilities & ETP', desc: 'Boiler, Steam, Water & ETP Operations', icon: Flame },
+  { key: 'Dispatcher', label: 'Dispatcher', desc: 'Reel Stock & Delivery Gatepass', icon: Truck },
+  { key: 'WarehouseStaff', label: 'Warehouse Staff', desc: 'Finished Reel Storage & Loading', icon: Warehouse },
+  { key: 'StoreManager', label: 'Store / Spares', desc: 'Spare Parts & Inventory', icon: Package },
+  { key: 'Shopper', label: 'Shopper (Purchase)', desc: 'Waste Paper & Chemical Purchase', icon: ShoppingCart },
+  { key: 'Viewer', label: 'Viewer', desc: 'Read-Only System Observer', icon: Eye },
+];
+
+const ROLE_COLORS: Record<string, string> = {
+  Admin: 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 border-amber-200 dark:border-amber-800',
+  PlantManager: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800',
+  LabOperator: 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 border-blue-200 dark:border-blue-800',
+  PulpOperator: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
+  Pulper: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
+  Viewer: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border-slate-200 dark:border-slate-700',
+  Shopper: 'bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300 border-sky-200 dark:border-sky-800',
+  Dispatcher: 'bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300 border-purple-200 dark:border-purple-800',
+  WarehouseStaff: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800',
+  StoreManager: 'bg-orange-50 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300 border-orange-200 dark:border-orange-800',
+  MachineOperator: 'bg-teal-50 text-teal-700 dark:bg-teal-950/40 dark:text-teal-300 border-teal-200 dark:border-teal-800',
+  Machinery: 'bg-teal-50 text-teal-700 dark:bg-teal-950/40 dark:text-teal-300 border-teal-200 dark:border-teal-800',
+  RewinderOperator: 'bg-cyan-50 text-cyan-700 dark:bg-cyan-950/40 dark:text-cyan-300 border-cyan-200 dark:border-cyan-800',
+  UtilitiesEtpOperator: 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 border-rose-200 dark:border-rose-800',
+  BoilerOperator: 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 border-rose-200 dark:border-rose-800',
+  EtpOperator: 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 border-rose-200 dark:border-rose-800',
+  Management: 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 border-amber-200 dark:border-amber-800',
+};
+
+const ROLE_LABELS: Record<string, string> = {
+  Admin: 'Admin Owner',
+  PlantManager: 'Plant Manager',
+  LabOperator: 'Lab Quality Control',
+  PulpOperator: 'Pulper',
+  Pulper: 'Pulper',
+  Viewer: 'Viewer',
+  Shopper: 'Shopper (Purchase)',
+  Dispatcher: 'Dispatcher',
+  WarehouseStaff: 'Warehouse Staff',
+  StoreManager: 'Store / Spares',
+  MachineOperator: 'Paper Machine',
+  Machinery: 'Paper Machine',
+  RewinderOperator: 'Rewinder',
+  UtilitiesEtpOperator: 'Utilities & ETP',
+  BoilerOperator: 'Utilities & ETP',
+  EtpOperator: 'Utilities & ETP',
+  Management: 'Management',
+};
+
+const getDisplayPin = (pinValue: string | undefined): string => {
+  return revealPin(pinValue);
+};
+
+export const UserManagementView: React.FC = () => {
+  const { user: currentUser, isSimulating } = useAuth();
+
+  const [users, setUsers] = useState<User[]>(() => getUsers());
+  const [customRoles, setCustomRoles] = useState<CustomRole[]>(() => getCustomRoles());
+  const [deletedRoles, setDeletedRoles] = useState<string[]>(() => getDeletedRoleKeys());
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterRole, setFilterRole] = useState<string>('ALL');
+
+  const [visiblePins, setVisiblePins] = useState<Record<string, boolean>>({});
+  const [showAddPin, setShowAddPin] = useState(false);
+  const [showEditPin, setShowEditPin] = useState(false);
+
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [deletingUser, setDeletingUser] = useState<User | null>(null);
+  const [showAddRoleModal, setShowAddRoleModal] = useState(false);
+  const [showDeleteRolesModal, setShowDeleteRolesModal] = useState(false);
+  const [newRoleName, setNewRoleName] = useState('');
+  const [roleModalError, setRoleModalError] = useState('');
+  const [roleSearchTerm, setRoleSearchTerm] = useState('');
+  const [deletingRoleKey, setDeletingRoleKey] = useState<string | null>(null);
+
+  // Sync data across tabs and storage updates
+  useEffect(() => {
+    const handleSync = () => {
+      const currentUsers = getUsers();
+      const currentCustom = getCustomRoles();
+      const currentDeleted = getDeletedRoleKeys();
+      setUsers(currentUsers);
+      setCustomRoles(currentCustom);
+      setDeletedRoles(currentDeleted);
+
+      const delSet = new Set(currentDeleted.map(k => k.toLowerCase()));
+      setFormData(prev => {
+        if (prev.roles && prev.roles.some(r => delSet.has((r as string).toLowerCase()))) {
+          const valid = prev.roles.filter(r => !delSet.has((r as string).toLowerCase()));
+          return {
+            ...prev,
+            roles: valid.length > 0 ? valid : ['PlantManager'],
+          };
+        }
+        return prev;
+      });
+    };
+    window.addEventListener('saheb_data_updated', handleSync);
+    window.addEventListener('storage', handleSync);
+    return () => {
+      window.removeEventListener('saheb_data_updated', handleSync);
+      window.removeEventListener('storage', handleSync);
+    };
+  }, []);
+
+  // Lock background page scroll whenever any User Management modal is open
+  useBodyScrollLock(showAddModal || !!editingUser || !!deletingUser || showAddRoleModal || showDeleteRolesModal);
+
+  // Intercept mobile/Android back button to dismiss open modal first
+  useMobileBackHandler(showAddModal, () => setShowAddModal(false), 'addUserModal');
+  useMobileBackHandler(!!editingUser, () => setEditingUser(null), 'editUserModal');
+  useMobileBackHandler(!!deletingUser, () => setDeletingUser(null), 'deleteUserModal');
+  useMobileBackHandler(showAddRoleModal, () => {
+    setShowAddRoleModal(false);
+    setNewRoleName('');
+    setRoleModalError('');
+  }, 'addRoleModal');
+  useMobileBackHandler(showDeleteRolesModal, () => {
+    setShowDeleteRolesModal(false);
+    setRoleSearchTerm('');
+    setDeletingRoleKey(null);
+  }, 'deleteRolesModal');
+
+  // Combined roles: standard MASTER_ROLES + custom roles, minus any deleted roles
+  const allRoles = useMemo<MasterRoleItem[]>(() => {
+    const customItems: MasterRoleItem[] = customRoles.map(cr => ({
+      key: cr.key as UserRole,
+      label: cr.label,
+      desc: cr.desc || 'Custom Defined Role',
+      icon: getRoleIcon(cr.label),
+    }));
+
+    const deletedSet = new Set(deletedRoles.map(k => k.toLowerCase()));
+    const activeMaster = MASTER_ROLES.filter(
+      r => !deletedSet.has((r.key as string).toLowerCase()) && !deletedSet.has(r.label.toLowerCase())
+    );
+    const activeCustom = customItems.filter(
+      ci => !deletedSet.has((ci.key as string).toLowerCase()) && !deletedSet.has(ci.label.toLowerCase())
+    );
+
+    const masterKeys = new Set(activeMaster.map(r => (r.key as string).toLowerCase().replace(/\s+/g, '')));
+    const masterLabels = new Set(activeMaster.map(r => r.label.toLowerCase().replace(/\s+/g, '')));
+    const filteredCustom = activeCustom.filter(ci => {
+      const kNorm = (ci.key as string).toLowerCase().replace(/\s+/g, '');
+      const lNorm = ci.label.toLowerCase().replace(/\s+/g, '');
+      return !masterKeys.has(kNorm) && !masterLabels.has(lNorm);
+    });
+
+    return [...activeMaster, ...filteredCustom];
+  }, [customRoles, deletedRoles]);
+
+  const roleUserCountMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    users.forEach(u => {
+      const uRoles = u.roles || [u.role];
+      uRoles.forEach(r => {
+        const key = (r as string).toLowerCase();
+        map[key] = (map[key] || 0) + 1;
+      });
+    });
+    return map;
+  }, [users]);
+
+  const filteredRolesList = useMemo(() => {
+    return allRoles.filter(r => {
+      const q = roleSearchTerm.toLowerCase();
+      return r.label.toLowerCase().includes(q) || (r.key as string).toLowerCase().includes(q);
+    });
+  }, [allRoles, roleSearchTerm]);
+
+  const handleDeleteRole = (roleKeyOrLabel: string) => {
+    if (!roleKeyOrLabel) return;
+    const success = deleteRole(roleKeyOrLabel, currentUser?.displayName || 'Admin');
+    if (success) {
+      setCustomRoles(getCustomRoles());
+      setDeletedRoles(getDeletedRoleKeys());
+      setUsers(getUsers());
+      // Also update formData.roles if it was selected
+      setFormData(prev => {
+        const remaining = prev.roles.filter(r => (r as string).toLowerCase() !== roleKeyOrLabel.toLowerCase());
+        return {
+          ...prev,
+          roles: remaining.length > 0 ? remaining : [allRoles.find(r => (r.key as string).toLowerCase() !== roleKeyOrLabel.toLowerCase())?.key || 'PlantManager'],
+        };
+      });
+      triggerToast(`Role "${roleKeyOrLabel}" deleted successfully!`);
+      setDeletingRoleKey(null);
+    }
+  };
+
+  const [formData, setFormData] = useState({
+    username: '',
+    displayName: '',
+    pin: '',
+    roles: ['PlantManager'] as UserRole[],
+    email: '',
+    phone: '',
+  });
+
+  const [formError, setFormError] = useState('');
+  const [toastMsg, setToastMsg] = useState('');
+
+  const triggerToast = (msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(''), 3000);
+  };
+
+  const togglePinVisibility = (username: string) => {
+    setVisiblePins(prev => ({ ...prev, [username]: !prev[username] }));
+  };
+
+  // Single Role Selection exclusively (1 role per user)
+  const selectFormRole = (roleKey: UserRole) => {
+    setFormData(prev => ({
+      ...prev,
+      roles: [roleKey],
+    }));
+  };
+
+  const handleAddNewRoleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = newRoleName.trim();
+    if (!trimmed) {
+      setRoleModalError('Role name is required');
+      return;
+    }
+
+    const exists = allRoles.some(
+      r => r.label.toLowerCase() === trimmed.toLowerCase() || (r.key as string).toLowerCase() === trimmed.toLowerCase()
+    );
+    if (exists) {
+      setRoleModalError(`Role "${trimmed}" already exists!`);
+      return;
+    }
+
+    const created = saveCustomRole(trimmed);
+    const updatedCustom = getCustomRoles();
+    const updatedDeleted = getDeletedRoleKeys();
+    setCustomRoles(updatedCustom);
+    setDeletedRoles(updatedDeleted);
+
+    // Automatically select the new single role in formData
+    setFormData(prev => ({
+      ...prev,
+      roles: [created.key as UserRole],
+    }));
+
+    setShowAddRoleModal(false);
+    setNewRoleName('');
+    setRoleModalError('');
+    triggerToast(`Role "${created.label}" created successfully!`);
+    addLog('Admin', 'Role Created', `Created role "${created.label}"`, currentUser?.displayName || 'Admin');
+  };
+
+  const handleOpenAddModal = () => {
+    const defaultRole = allRoles[0]?.key || 'PlantManager';
+    setFormData({
+      username: '',
+      displayName: '',
+      pin: '',
+      roles: [defaultRole],
+      email: '',
+      phone: '',
+    });
+    setFormError('');
+    setShowAddModal(true);
+  };
+
+  const handleOpenEditModal = (u: User) => {
+    setEditingUser(u);
+    const existingRole = u.role || (u.roles && u.roles.length > 0 ? u.roles[0] : 'PlantManager');
+    setFormData({
+      username: u.username,
+      displayName: u.displayName,
+      pin: getDisplayPin(u.pin),
+      roles: [existingRole],
+      email: u.email || '',
+      phone: u.phone || '',
+    });
+    setShowEditPin(false);
+    setFormError('');
+  };
+
+  const handleCreateUserSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError('');
+
+    if (!formData.username.trim() || !formData.displayName.trim() || !formData.pin.trim()) {
+      setFormError('Display Name, Username, and 4-Digit PIN are required');
+      return;
+    }
+
+    if (formData.roles.length === 0) {
+      setFormError('Please select at least 1 role for this user account');
+      return;
+    }
+
+    if (formData.pin.length !== 4 || isNaN(Number(formData.pin))) {
+      setFormError('PIN must be exactly 4 numeric digits');
+      return;
+    }
+
+    const cleanUsername = formData.username.trim().toLowerCase().replace(/\s+/g, '_');
+    if (users.some(u => u.username.toLowerCase() === cleanUsername)) {
+      setFormError(`Username "@${cleanUsername}" already exists!`);
+      return;
+    }
+
+    const primaryRole = formData.roles[0];
+    const defaultModules = getDefaultModulesForRoles(formData.roles);
+
+    const newUser: User = {
+      username: cleanUsername,
+      displayName: formData.displayName.trim(),
+      role: primaryRole,
+      roles: formData.roles,
+      pin: formData.pin.trim(),
+      email: formData.email.trim(),
+      phone: formData.phone.trim(),
+      active: true,
+      isNewUser: true,
+      designation: `${formData.displayName.trim()} (${ROLE_LABELS[primaryRole] || primaryRole})`,
+      customModules: defaultModules,
+    };
+
+    saveUser(newUser);
+    setUsers(getUsers());
+    setShowAddModal(false);
+    triggerToast(`User "${newUser.displayName}" created successfully!`);
+    addLog('Admin', 'User Created', `Created account @${newUser.username} with roles: ${newUser.roles?.join(', ')}`, currentUser?.displayName || 'Admin');
+  };
+
+  const handleEditUserSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingUser) return;
+    setFormError('');
+
+    if (!formData.displayName.trim()) {
+      setFormError('Display Name is required');
+      return;
+    }
+
+    if (formData.roles.length === 0) {
+      setFormError('Please select at least 1 role for this user account');
+      return;
+    }
+
+    const pinTrimmed = formData.pin.trim();
+    if (pinTrimmed && (pinTrimmed.length !== 4 || isNaN(Number(pinTrimmed)))) {
+      setFormError('PIN must be exactly 4 numeric digits');
+      return;
+    }
+
+    const isMasterAdmin = editingUser.username.toLowerCase() === 'admin';
+    const newRole = isMasterAdmin ? ('Admin' as UserRole) : formData.roles[0];
+    const newRoles = isMasterAdmin ? (['Admin'] as UserRole[]) : formData.roles;
+    const roleChanged = editingUser.role !== newRole || JSON.stringify(editingUser.roles || []) !== JSON.stringify(newRoles);
+
+    // If role changed, recompute canonical default modules for the new roles so permissions and module access update instantly.
+    // If role did not change, preserve custom-configured modules.
+    const customModules = roleChanged
+      ? getDefaultModulesForRoles(newRoles)
+      : (editingUser.customModules && editingUser.customModules.length > 0
+          ? editingUser.customModules
+          : getDefaultModulesForRoles(newRoles));
+
+    const newRoleLabel = ROLE_LABELS[newRole] || newRole;
+    let updatedDesignation = editingUser.designation;
+    if (roleChanged || !updatedDesignation) {
+      updatedDesignation = `${formData.displayName.trim()} (${newRoleLabel})`;
+    }
+
+    const updated: User = {
+      ...editingUser,
+      displayName: formData.displayName.trim(),
+      role: newRole,
+      roles: newRoles,
+      pin: pinTrimmed ? pinTrimmed : editingUser.pin,
+      email: formData.email.trim(),
+      phone: formData.phone.trim(),
+      designation: updatedDesignation,
+      customModules: isMasterAdmin ? editingUser.customModules : customModules,
+    };
+
+    saveUser(updated);
+    setUsers(getUsers());
+    setEditingUser(null);
+    triggerToast(`User "${updated.displayName}" updated successfully! Role: ${newRoleLabel}`);
+    addLog('Admin', 'User Updated', `Updated account @${updated.username} with role: ${newRoleLabel} (${updated.roles?.join(', ')})`, currentUser?.displayName || 'Admin');
+  };
+
+  const handleToggleActive = (u: User) => {
+    if (u.username === currentUser?.username) {
+      alert('You cannot deactivate your own Admin account!');
+      return;
+    }
+    deactivateUser(u.username, currentUser?.displayName || 'Admin');
+    setUsers(getUsers());
+    const newStatus = u.active === false ? 'Activated' : 'Deactivated';
+    triggerToast(`User "${u.displayName}" account ${newStatus}!`);
+  };
+
+  const handleConfirmDelete = () => {
+    if (!deletingUser) return;
+    if (deletingUser.username === currentUser?.username) {
+      alert('You cannot delete your own Admin account!');
+      setDeletingUser(null);
+      return;
+    }
+    deleteUser(deletingUser.username, currentUser?.displayName || 'Admin');
+    setUsers(getUsers());
+    triggerToast(`User "${deletingUser.displayName}" removed permanently`);
+    setDeletingUser(null);
+  };
+
+  const handleUnlockUser = (u: User) => {
+    unlockUserAccount(u.username, currentUser?.displayName || 'Admin');
+    setUsers(getUsers());
+    triggerToast(`Account for "${u.displayName}" (@${u.username}) has been unlocked!`);
+  };
+
+  const filteredUsers = useMemo(() => {
+    return users.filter(u => {
+      const matchSearch =
+        u.displayName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        u.username.toLowerCase().includes(searchTerm.toLowerCase());
+      const uRoles = u.roles || [u.role];
+      const matchRole = filterRole === 'ALL' || uRoles.includes(filterRole as UserRole);
+      return matchSearch && matchRole;
+    });
+  }, [users, searchTerm, filterRole]);
+
+  const lockedUsers = useMemo(() => {
+    return users.filter(u => getAccountLockInfo(u.username).isLocked);
+  }, [users]);
+
+  if (currentUser?.role !== 'Admin' && currentUser?.username.toLowerCase() !== 'admin') {
+    if (isSimulating) {
+      return <Navigate to={getFirstAccessibleRoute(currentUser)} replace />;
+    }
+    return (
+      <div className="p-8 text-center bg-white dark:bg-slate-900 rounded-3xl border border-red-200 dark:border-red-800 space-y-3 max-w-md mx-auto my-12">
+        <div className="w-12 h-12 rounded-2xl bg-red-100 dark:bg-red-950/50 text-red-600 dark:text-red-400 mx-auto flex items-center justify-center">
+          <ShieldAlert className="h-6 w-6" />
+        </div>
+        <h3 className="text-base font-black text-slate-900 dark:text-white">Access Restricted</h3>
+        <p className="text-xs text-slate-500 dark:text-slate-400 font-medium max-w-md mx-auto">
+          User Management is strictly restricted to Super Admin only.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4 font-sans pb-12 text-left">
+      {toastMsg && (
+        <div className="fixed top-5 right-5 z-50 bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-xl border border-slate-700 flex items-center gap-2 text-xs font-bold animate-in fade-in slide-in-from-top-2">
+          <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+          <span>{toastMsg}</span>
+        </div>
+      )}
+
+      <div className="bg-white dark:bg-[#131d38] rounded-[24px] p-5 sm:p-6 shadow-[5px_5px_16px_rgba(170,185,220,0.18),-5px_-5px_16px_rgba(255,255,255,0.9)] dark:shadow-[4px_4px_14px_rgba(0,0,0,0.35)] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <div className="w-12 h-12 rounded-[16px] bg-[#EEF2FF] dark:bg-indigo-950/60 shadow-[inset_1.5px_1.5px_3px_rgba(180,195,230,0.2),inset_-1.5px_-1.5px_3px_rgba(255,255,255,0.9)] dark:shadow-none flex items-center justify-center text-[#6366F1] dark:text-indigo-400 shrink-0">
+            <Users className="h-6 w-6 stroke-[2]" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white tracking-tight">
+                User Accounts &amp; Role Access
+              </h2>
+              <span className="px-2.5 py-0.5 rounded-[10px] bg-[#EEF2FF] text-[#6366F1] dark:bg-indigo-950/60 dark:text-indigo-400 text-xs font-bold shadow-[1px_1px_3px_rgba(180,195,230,0.2)]">
+                {users.length} Active
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Manage employee accounts, assign role per person, and configure 4-digit security PINs
+            </p>
+          </div>
+        </div>
+
+        <button
+          onClick={handleOpenAddModal}
+          className="px-5 py-3 rounded-[16px] bg-[#6366F1] hover:bg-[#4F46E5] text-white font-bold text-xs shadow-[2px_2px_8px_rgba(99,102,241,0.35)] transition cursor-pointer flex items-center justify-center gap-2 shrink-0 active:scale-95"
+        >
+          <Plus className="h-4 w-4 stroke-[2.5]" />
+          <span>Add New User</span>
+        </button>
+      </div>
+
+      {lockedUsers.length > 0 && (
+        <div className="bg-gradient-to-r from-rose-500/10 via-amber-500/10 to-rose-500/10 dark:from-rose-950/40 dark:via-amber-950/40 dark:to-rose-950/40 border-2 border-rose-400 dark:border-rose-700 rounded-[22px] p-4 sm:p-5 shadow-lg flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-rose-500 text-white flex items-center justify-center shrink-0 shadow-md animate-pulse">
+              <Lock className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-sm font-black text-rose-900 dark:text-rose-200">
+                🚨 {lockedUsers.length} {lockedUsers.length === 1 ? 'Account is Currently LOCKED' : 'Accounts are Currently LOCKED'}
+              </div>
+              <div className="text-xs text-rose-700 dark:text-rose-300 font-medium">
+                {lockedUsers.map(u => `@${u.username} (${u.displayName})`).join(', ')} — 5 failed PIN attempts.
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {lockedUsers.map(u => (
+              <button
+                key={u.username}
+                type="button"
+                onClick={() => handleUnlockUser(u)}
+                className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-black text-xs shadow-md transition flex items-center gap-1.5 cursor-pointer active:scale-95"
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+                <span>Unlock @{u.username}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white dark:bg-[#131d38] rounded-[20px] p-3 sm:p-4 shadow-[4px_4px_12px_rgba(170,185,220,0.15),-4px_-4px_12px_rgba(255,255,255,0.9)] flex flex-col sm:flex-row gap-3 items-center justify-between">
+        <div className="relative w-full sm:w-80">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
+            placeholder="Search by name or username..."
+            className="w-full pl-10 pr-9 py-2.5 bg-[#F4F7FC] dark:bg-slate-900 border-none rounded-[14px] text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500/40 shadow-[inset_1.5px_1.5px_3px_rgba(180,195,230,0.2)] dark:shadow-none"
+          />
+          {searchTerm && (
+            <button 
+              onClick={() => setSearchTerm('')} 
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              aria-label="Clear search query"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 text-xs font-bold text-slate-500 dark:text-slate-400 shrink-0">
+          <span>Showing <strong className="text-slate-800 dark:text-white">{filteredUsers.length}</strong> of {users.length} accounts</span>
+        </div>
+      </div>
+
+      <div className="hidden md:block bg-white dark:bg-[#131d38] rounded-[24px] overflow-hidden shadow-[5px_5px_16px_rgba(170,185,220,0.18),-5px_-5px_16px_rgba(255,255,255,0.9)] dark:shadow-[4px_4px_14px_rgba(0,0,0,0.35)]">
+        <table className="w-full text-left text-xs border-collapse">
+          <thead>
+              <tr className="bg-[#F8FAFD] dark:bg-slate-900/80 border-b border-slate-100 dark:border-slate-800 text-slate-400 uppercase tracking-wider font-extrabold text-[10px]">
+                <th className="py-4 px-6">User Details</th>
+                <th className="py-4 px-6 text-center">Assigned Role</th>
+              <th className="py-4 px-6">Mobile &amp; Email</th>
+              <th className="py-4 px-6">4-Digit PIN</th>
+              <th className="py-4 px-6">Status</th>
+              <th className="py-4 px-6 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+            {filteredUsers.map(u => {
+              const assignedRoles = u.roles && u.roles.length > 0 ? u.roles : [u.role];
+              return (
+                <tr key={u.username} className={`hover:bg-[#F8FAFD]/70 dark:hover:bg-slate-800/40 transition ${u.active === false ? 'opacity-50' : ''}`}>
+                  <td className="py-4 px-6">
+                    <div className="flex items-center gap-3">
+                      <div className="h-10 w-10 rounded-[14px] bg-[#EEF2FF] dark:bg-indigo-950/60 flex items-center justify-center text-[#6366F1] font-black text-xs shrink-0 shadow-[1px_1px_3px_rgba(180,195,230,0.2)]">
+                        {u.displayName.substring(0, 2).toUpperCase()}
+                      </div>
+                      <div>
+                        <div className="font-bold text-slate-900 dark:text-white text-sm">{u.displayName}</div>
+                        <div className="font-mono text-slate-400 text-[11px]">@{u.username}</div>
+                      </div>
+                    </div>
+                  </td>
+
+                  <td className="py-4 px-6 text-center">
+                    <div className="flex flex-wrap gap-1.5 justify-center items-center">
+                      {assignedRoles.map(rKey => (
+                        <span key={rKey} className={`inline-flex items-center justify-center px-3 py-1 rounded-[10px] text-[11px] font-bold border ${ROLE_COLORS[rKey] || 'bg-slate-100 text-slate-700'}`}>
+                          {ROLE_LABELS[rKey] || rKey}
+                        </span>
+                      ))}
+                    </div>
+                  </td>
+
+                  <td className="py-4 px-6 font-mono text-slate-600 dark:text-slate-300">
+                    <div>{u.phone || 'No Mobile'}</div>
+                    <div className="text-[10px] text-slate-400 truncate max-w-[160px]">{u.email || 'No Email'}</div>
+                  </td>
+
+                  <td className="py-4 px-6">
+                    <div className="flex items-center gap-2 font-mono text-xs font-bold text-slate-800 dark:text-slate-200">
+                      <span>{visiblePins[u.username] ? revealPin(u.pin) : '••••'}</span>
+                      <button
+                        onClick={() => togglePinVisibility(u.username)}
+                        className="p-1 text-slate-400 hover:text-indigo-600 transition cursor-pointer"
+                        title={visiblePins[u.username] ? 'Hide PIN' : 'Show PIN'}
+                        aria-label={visiblePins[u.username] ? 'Hide PIN' : 'Show PIN'}
+                      >
+                        {visiblePins[u.username] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                  </td>
+
+                  <td className="py-4 px-6">
+                    {(() => {
+                      const lockInfo = getAccountLockInfo(u.username);
+                      if (lockInfo.isLocked) {
+                        return (
+                          <div className="flex items-center gap-2">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-black bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-300 dark:border-rose-800 animate-pulse">
+                              <Lock className="h-3 w-3 text-rose-600" />
+                              <span>Locked ({lockInfo.remainingMinutes}m)</span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleUnlockUser(u)}
+                              className="px-2.5 py-1 rounded-full text-[11px] font-black bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white shadow-xs transition flex items-center gap-1 cursor-pointer active:scale-95"
+                              title="Admin Unlock Account"
+                            >
+                              <KeyRound className="h-3 w-3" />
+                              <span>Unlock</span>
+                            </button>
+                          </div>
+                        );
+                      }
+                      return (
+                        <button
+                          onClick={() => handleToggleActive(u)}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition cursor-pointer border ${
+                            u.active !== false
+                              ? 'bg-emerald-50 text-emerald-600 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-800'
+                              : 'bg-red-50 text-red-600 border-red-200 dark:bg-red-950/30 dark:text-red-400 dark:border-red-800'
+                          }`}
+                        >
+                          {u.active !== false ? <UserCheck className="h-3.5 w-3.5" /> : <UserX className="h-3.5 w-3.5" />}
+                          <span>{u.active !== false ? 'Active' : 'Inactive'}</span>
+                        </button>
+                      );
+                    })()}
+                  </td>
+
+                  <td className="py-4 px-6 text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        onClick={() => handleOpenEditModal(u)}
+                        className="p-2 rounded-[10px] bg-[#F4F7FC] dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-[#6366F1] transition cursor-pointer shadow-xs"
+                        title="Edit Account"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      {u.username !== 'admin' && (
+                        <button
+                          onClick={() => setDeletingUser(u)}
+                          className="p-2 rounded-[10px] bg-[#F4F7FC] dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-red-600 transition cursor-pointer shadow-xs"
+                          title="Delete Account"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 md:hidden">
+        {filteredUsers.map(u => {
+          const assignedRoles = u.roles && u.roles.length > 0 ? u.roles : [u.role];
+          const lockInfo = getAccountLockInfo(u.username);
+          return (
+            <div
+              key={u.username}
+              className="bg-white dark:bg-[#131d38] rounded-[20px] p-4 shadow-[4px_4px_12px_rgba(170,185,220,0.15),-4px_-4px_12px_rgba(255,255,255,0.9)] space-y-3"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-[12px] bg-[#EEF2FF] text-[#6366F1] font-black text-xs flex items-center justify-center">
+                    {u.displayName.substring(0, 2).toUpperCase()}
+                  </div>
+                  <div>
+                    <div className="font-bold text-slate-900 dark:text-white text-sm">{u.displayName}</div>
+                    <div className="font-mono text-slate-400 text-xs">@{u.username}</div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleOpenEditModal(u)}
+                    className="p-1.5 rounded-lg bg-slate-100 text-slate-600"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  {u.username !== 'admin' && (
+                    <button
+                      onClick={() => setDeletingUser(u)}
+                      className="p-1.5 rounded-lg bg-slate-100 text-red-600"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {lockInfo.isLocked && (
+                <div className="p-2.5 rounded-xl bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-300 dark:border-rose-800 flex items-center justify-between gap-2 text-xs font-bold">
+                  <div className="flex items-center gap-1.5">
+                    <Lock className="h-3.5 w-3.5 text-rose-600 shrink-0" />
+                    <span>Locked ({lockInfo.remainingMinutes}m left)</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleUnlockUser(u)}
+                    className="px-2.5 py-1 rounded-full text-[11px] font-black bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 text-white shadow-xs cursor-pointer active:scale-95"
+                  >
+                    Unlock
+                  </button>
+                </div>
+              )}
+
+              <div className="flex flex-wrap gap-1.5">
+                {assignedRoles.map(rKey => (
+                  <span key={rKey} className={`px-2.5 py-0.5 rounded-md text-[10px] font-bold border ${ROLE_COLORS[rKey] || 'bg-slate-100'}`}>
+                    {ROLE_LABELS[rKey] || rKey}
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {showAddModal && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in overscroll-contain"
+          onClick={e => {
+            if (e.target === e.currentTarget) setShowAddModal(false);
+          }}
+        >
+          <div 
+            className="bg-[#F8FAFD] dark:bg-[#131d38] rounded-[24px] sm:rounded-[28px] max-w-[540px] w-full max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] flex flex-col shadow-[10px_10px_30px_rgba(163,175,205,0.3),-10px_-10px_30px_rgba(255,255,255,0.95)] border border-white/60 dark:border-slate-800 animate-in zoom-in-95 text-left overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Modal Header - Fixed at top */}
+            <div className="p-5 sm:p-6 pb-3 sm:pb-4 flex items-start justify-between border-b border-slate-100 dark:border-slate-800/80 bg-[#F8FAFD] dark:bg-[#131d38] shrink-0">
+              <div className="flex items-center gap-3.5">
+                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-[16px] bg-white dark:bg-slate-900 shadow-[3px_3px_8px_rgba(170,185,220,0.22),-3px_-3px_8px_rgba(255,255,255,0.95)] flex items-center justify-center text-[#6366F1] dark:text-indigo-400 shrink-0">
+                  <Plus className="h-5 w-5 sm:h-6 sm:w-6 stroke-[2.5]" />
+                </div>
+                <div>
+                  <h3 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white tracking-tight">
+                    Create New User Account
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">
+                    Add a new user and assign roles to provide system access.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowAddModal(false)}
+                className="w-9 h-9 rounded-full bg-white dark:bg-slate-900 shadow-[2px_2px_6px_rgba(170,185,220,0.2),-2px_-2px_6px_rgba(255,255,255,0.9)] flex items-center justify-center text-slate-500 hover:text-slate-800 dark:hover:text-white transition cursor-pointer shrink-0"
+                aria-label="Close modal"
+              >
+                <X className="h-4.5 w-4.5 stroke-[2.2]" />
+              </button>
+            </div>
+
+            {/* Scrollable Content Body */}
+            <div 
+              data-modal-scroll="true"
+              className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 overscroll-contain"
+            >
+              {formError && (
+                <div className="p-3 bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 text-xs font-bold rounded-[14px] border border-red-200">
+                  {formError}
+                </div>
+              )}
+
+              <form id="create-user-form" onSubmit={handleCreateUserSubmit} className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <div className="rounded-[18px] bg-white dark:bg-slate-900 p-3 shadow-[3px_3px_10px_rgba(170,185,220,0.18),-3px_-3px_10px_rgba(255,255,255,0.9)] flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-[12px] bg-[#EEF2FF] dark:bg-indigo-950/60 text-[#6366F1] dark:text-indigo-400 flex items-center justify-center shrink-0">
+                      <UserIcon className="h-4.5 w-4.5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 block leading-tight">
+                        Full Display Name
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={formData.displayName}
+                        onChange={e => setFormData({ ...formData, displayName: e.target.value })}
+                        placeholder="e.g. Ramesh Kumar"
+                        className="w-full text-xs font-semibold text-slate-900 dark:text-white placeholder-slate-400 bg-transparent border-none focus:outline-none p-0 mt-0.5"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-[18px] bg-white dark:bg-slate-900 p-3 shadow-[3px_3px_10px_rgba(170,185,220,0.18),-3px_-3px_10px_rgba(255,255,255,0.9)] flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-[12px] bg-[#EEF2FF] dark:bg-indigo-950/60 text-[#6366F1] dark:text-indigo-400 flex items-center justify-center shrink-0 font-bold text-sm">
+                      <AtSign className="h-4.5 w-4.5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 block leading-tight">
+                        Username (Login ID)
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={formData.username}
+                        onChange={e => setFormData({ ...formData, username: e.target.value })}
+                        placeholder="e.g. ramesh_k"
+                        className="w-full text-xs font-semibold text-slate-900 dark:text-white placeholder-slate-400 bg-transparent border-none focus:outline-none p-0 mt-0.5 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-[18px] bg-white dark:bg-slate-900 p-3 shadow-[3px_3px_10px_rgba(170,185,220,0.18),-3px_-3px_10px_rgba(255,255,255,0.9)] flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-[12px] bg-[#EEF2FF] dark:bg-indigo-950/60 text-[#6366F1] dark:text-indigo-400 flex items-center justify-center shrink-0">
+                      <Phone className="h-4.5 w-4.5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 block leading-tight">
+                        Mobile Number (10 Digits)
+                      </label>
+                      <input
+                        type="tel"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={10}
+                        value={formData.phone}
+                        onChange={e => setFormData({ ...formData, phone: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+                        placeholder="e.g. 9876543210"
+                        className="w-full text-xs font-semibold text-slate-900 dark:text-white placeholder-slate-400 bg-transparent border-none focus:outline-none p-0 mt-0.5 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-[18px] bg-white dark:bg-slate-900 p-3 shadow-[3px_3px_10px_rgba(170,185,220,0.18),-3px_-3px_10px_rgba(255,255,255,0.9)] flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-[12px] bg-[#EEF2FF] dark:bg-indigo-950/60 text-[#6366F1] dark:text-indigo-400 flex items-center justify-center shrink-0">
+                      <Lock className="h-4.5 w-4.5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 block leading-tight">
+                        4-Digit Security PIN
+                      </label>
+                      <div className="flex items-center justify-between gap-1">
+                        <input
+                          type={showAddPin ? 'text' : 'password'}
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          maxLength={4}
+                          required
+                          value={formData.pin}
+                          onChange={e => setFormData({ ...formData, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                          placeholder="e.g. 1234"
+                          className="w-full text-xs font-semibold text-slate-900 dark:text-white placeholder-slate-400 bg-transparent border-none focus:outline-none p-0 mt-0.5 font-mono tracking-widest"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowAddPin(!showAddPin)}
+                          className="p-1 text-slate-400 hover:text-indigo-600 transition cursor-pointer shrink-0"
+                          title={showAddPin ? 'Hide PIN' : 'Show PIN'}
+                        >
+                          {showAddPin ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2 pt-1">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-sm font-bold text-slate-900 dark:text-white block leading-tight">Assign Role</span>
+                      <span className="text-[11px] text-slate-500 dark:text-slate-400 font-normal">Select a role for this user account</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRoleSearchTerm('');
+                          setDeletingRoleKey(null);
+                          setShowDeleteRolesModal(true);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[12px] text-xs font-bold text-rose-600 dark:text-rose-400 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/60 dark:hover:bg-rose-900/60 transition cursor-pointer active:scale-95 border border-rose-200/70 dark:border-rose-800/70 shadow-xs"
+                        title="Delete or Manage Roles"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        <span>Delete Role</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRoleModalError('');
+                          setNewRoleName('');
+                          setShowAddRoleModal(true);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[12px] text-xs font-bold text-[#6366F1] dark:text-indigo-400 bg-[#EEF2FF] hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 transition cursor-pointer active:scale-95 border border-[#6366F1]/30 shadow-xs"
+                      >
+                        <Plus className="h-3.5 w-3.5 stroke-[2.5]" />
+                        <span>Add Role</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                    {allRoles.map(r => {
+                      const isSelected = formData.roles.length > 0 && formData.roles[0] === r.key;
+                      const RoleIcon = r.icon;
+
+                      return (
+                        <button
+                          key={r.key}
+                          type="button"
+                          onClick={() => selectFormRole(r.key)}
+                          className={`p-3 rounded-[16px] text-left cursor-pointer transition-all flex items-center justify-between gap-2 select-none active:scale-95 ${
+                            isSelected
+                              ? 'bg-[#EEF2FF] text-[#4F46E5] border border-[#6366F1] shadow-[2px_2px_8px_rgba(99,102,241,0.2),-2px_-2px_8px_rgba(255,255,255,0.9)] dark:bg-indigo-950/60 dark:text-indigo-300 font-bold'
+                              : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 shadow-[2px_2px_6px_rgba(170,185,220,0.15),-2px_-2px_6px_rgba(255,255,255,0.9)] hover:bg-[#F4F7FC] font-medium border border-transparent'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <RoleIcon className={`h-4 w-4 shrink-0 ${isSelected ? 'text-[#6366F1] dark:text-indigo-400' : 'text-slate-400'}`} />
+                            <span className="text-xs truncate">{r.label}</span>
+                          </div>
+                          {isSelected && (
+                            <div className="w-4 h-4 rounded-full bg-[#6366F1] text-white flex items-center justify-center shrink-0">
+                              <Check className="h-2.5 w-2.5 stroke-[3]" />
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="rounded-[16px] bg-[#EEF2FF] dark:bg-indigo-950/40 text-[#4F46E5] dark:text-indigo-300 p-3 flex items-center gap-2.5 text-xs font-medium border border-[#E0E7FF] dark:border-indigo-900/60">
+                  <Info className="h-4 w-4 shrink-0 stroke-[2.2]" />
+                  <span>
+                    You can edit roles and permissions anytime from the <strong className="font-bold">User Accounts</strong> section.
+                  </span>
+                </div>
+              </form>
+            </div>
+
+            {/* Modal Actions Footer - Fixed at bottom */}
+            <div className="p-4 sm:p-6 pt-3 sm:pt-4 border-t border-slate-100 dark:border-slate-800/80 bg-[#F8FAFD] dark:bg-[#131d38] space-y-2 shrink-0">
+              <button
+                type="submit"
+                form="create-user-form"
+                className="w-full py-3.5 px-4 bg-[#6366F1] hover:bg-[#4F46E5] text-white rounded-[16px] text-xs font-bold shadow-[0_4px_14px_rgba(99,102,241,0.35)] cursor-pointer transition flex items-center justify-center gap-2 active:scale-98"
+              >
+                <UserPlus className="h-4 w-4 stroke-[2.2]" />
+                <span>Create User Account</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowAddModal(false)}
+                className="w-full py-3 px-4 bg-white dark:bg-slate-900 text-red-500 dark:text-red-400 hover:bg-red-50/50 dark:hover:bg-red-950/20 rounded-[16px] text-xs font-bold shadow-[2px_2px_8px_rgba(170,185,220,0.18),-2px_-2px_8px_rgba(255,255,255,0.95)] cursor-pointer transition flex items-center justify-center gap-2 active:scale-98"
+              >
+                <LogOut className="h-4 w-4 stroke-[2.2]" />
+                <span>Cancel</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingUser && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in overscroll-contain"
+          onClick={e => {
+            if (e.target === e.currentTarget) setEditingUser(null);
+          }}
+        >
+          <div 
+            className="bg-[#F8FAFD] dark:bg-[#131d38] rounded-[24px] sm:rounded-[28px] max-w-[540px] w-full max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] flex flex-col shadow-[10px_10px_30px_rgba(163,175,205,0.3),-10px_-10px_30px_rgba(255,255,255,0.95)] border border-white/60 dark:border-slate-800 animate-in zoom-in-95 text-left overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Modal Header - Fixed at top */}
+            <div className="p-5 sm:p-6 pb-3 sm:pb-4 flex items-start justify-between border-b border-slate-100 dark:border-slate-800/80 bg-[#F8FAFD] dark:bg-[#131d38] shrink-0">
+              <div className="flex items-center gap-3.5">
+                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-[16px] bg-white dark:bg-slate-900 shadow-[3px_3px_8px_rgba(170,185,220,0.22),-3px_-3px_8px_rgba(255,255,255,0.95)] flex items-center justify-center text-[#6366F1] dark:text-indigo-400 shrink-0">
+                  <Pencil className="h-5 w-5 stroke-[2]" />
+                </div>
+                <div>
+                  <h3 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white tracking-tight">
+                    Edit Account Details
+                  </h3>
+                  <p className="text-xs text-slate-400 font-mono mt-0.5">User: @{editingUser.username}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingUser(null)}
+                className="w-9 h-9 rounded-full bg-white dark:bg-slate-900 shadow-[2px_2px_6px_rgba(170,185,220,0.2),-2px_-2px_6px_rgba(255,255,255,0.9)] flex items-center justify-center text-slate-500 hover:text-slate-800 dark:hover:text-white transition cursor-pointer shrink-0"
+                aria-label="Close modal"
+              >
+                <X className="h-4.5 w-4.5" />
+              </button>
+            </div>
+
+            {/* Scrollable Content Body */}
+            <div 
+              data-modal-scroll="true"
+              className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 overscroll-contain"
+            >
+              {(() => {
+                const editLockInfo = getAccountLockInfo(editingUser.username);
+                if (editLockInfo.isLocked) {
+                  return (
+                    <div className="p-3 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 text-xs font-bold rounded-[14px] border border-rose-200 dark:border-rose-800 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <Lock className="h-4 w-4 text-rose-600 shrink-0" />
+                        <span>Account is LOCKED ({editLockInfo.remainingMinutes}m remaining)</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleUnlockUser(editingUser);
+                          setEditingUser({ ...editingUser, lockedUntil: undefined, failedLoginAttempts: 0 });
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 text-white font-bold text-xs shadow-xs transition flex items-center gap-1 cursor-pointer shrink-0 active:scale-95"
+                      >
+                        <KeyRound className="w-3.5 h-3.5" />
+                        <span>Unlock Account</span>
+                      </button>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+
+              {formError && (
+                <div className="p-3 bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 text-xs font-bold rounded-[14px] border border-red-200">
+                  {formError}
+                </div>
+              )}
+
+              <form id="edit-user-form" onSubmit={handleEditUserSubmit} className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <div className="rounded-[18px] bg-white dark:bg-slate-900 p-3 shadow-[3px_3px_10px_rgba(170,185,220,0.18),-3px_-3px_10px_rgba(255,255,255,0.9)] flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-[12px] bg-[#EEF2FF] dark:bg-indigo-950/60 text-[#6366F1] dark:text-indigo-400 flex items-center justify-center shrink-0">
+                      <UserIcon className="h-4.5 w-4.5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 block leading-tight">Full Display Name</label>
+                      <input
+                        type="text"
+                        required
+                        value={formData.displayName}
+                        onChange={e => setFormData({ ...formData, displayName: e.target.value })}
+                        className="w-full text-xs font-semibold text-slate-900 dark:text-white bg-transparent border-none focus:outline-none p-0 mt-0.5"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-[18px] bg-white dark:bg-slate-900 p-3 shadow-[3px_3px_10px_rgba(170,185,220,0.18),-3px_-3px_10px_rgba(255,255,255,0.9)] flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-[12px] bg-[#EEF2FF] dark:bg-indigo-950/60 text-[#6366F1] dark:text-indigo-400 flex items-center justify-center shrink-0">
+                      <Phone className="h-4.5 w-4.5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 block leading-tight">Mobile Number (10 Digits)</label>
+                      <input
+                        type="tel"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={10}
+                        value={formData.phone}
+                        onChange={e => setFormData({ ...formData, phone: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+                        className="w-full text-xs font-semibold text-slate-900 dark:text-white bg-transparent border-none focus:outline-none p-0 mt-0.5 font-mono"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-[18px] bg-white dark:bg-slate-900 p-3 shadow-[3px_3px_10px_rgba(170,185,220,0.18),-3px_-3px_10px_rgba(255,255,255,0.9)] flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-[12px] bg-[#EEF2FF] dark:bg-indigo-950/60 text-[#6366F1] dark:text-indigo-400 flex items-center justify-center shrink-0">
+                    <Lock className="h-4.5 w-4.5" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 block leading-tight">4-Digit Security PIN <span className="text-[9px] text-slate-400 font-normal">(Leave blank to keep current)</span></label>
+                    <div className="flex items-center justify-between gap-1">
+                      <input
+                        type={showEditPin ? 'text' : 'password'}
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={4}
+                        value={formData.pin}
+                        placeholder="•••• (Unchanged)"
+                        onChange={e => setFormData({ ...formData, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                        className="w-full text-xs font-semibold text-slate-900 dark:text-white bg-transparent border-none focus:outline-none p-0 mt-0.5 font-mono tracking-widest"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowEditPin(!showEditPin)}
+                        className="p-1 text-slate-400 hover:text-indigo-600 transition cursor-pointer shrink-0"
+                        title={showEditPin ? 'Hide PIN' : 'Show PIN'}
+                      >
+                        {showEditPin ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2 pt-1">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-sm font-bold text-slate-900 dark:text-white block leading-tight">Assign Role</span>
+                      <span className="text-[11px] text-slate-500 dark:text-slate-400 font-normal">Select a role for this user account</span>
+                    </div>
+                    {editingUser.username !== 'admin' && (
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRoleSearchTerm('');
+                            setDeletingRoleKey(null);
+                            setShowDeleteRolesModal(true);
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[12px] text-xs font-bold text-rose-600 dark:text-rose-400 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/60 dark:hover:bg-rose-900/60 transition cursor-pointer active:scale-95 border border-rose-200/70 dark:border-rose-800/70 shadow-xs"
+                          title="Delete or Manage Roles"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          <span>Delete Role</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRoleModalError('');
+                            setNewRoleName('');
+                            setShowAddRoleModal(true);
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[12px] text-xs font-bold text-[#6366F1] dark:text-indigo-400 bg-[#EEF2FF] hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 transition cursor-pointer active:scale-95 border border-[#6366F1]/30 shadow-xs"
+                        >
+                          <Plus className="h-3.5 w-3.5 stroke-[2.5]" />
+                          <span>Add Role</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {editingUser.username === 'admin' ? (
+                    <div className="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-[16px] text-amber-800 dark:text-amber-300 text-xs font-bold flex items-center justify-between">
+                      <span className="flex items-center gap-1.5"><Crown className="h-4 w-4 inline-block text-amber-600 dark:text-amber-400" /> Fixed System Administrator Account</span>
+                      <Shield className="h-4 w-4" />
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                      {allRoles.map(r => {
+                        const isSelected = formData.roles.length > 0 && formData.roles[0] === r.key;
+                        const RoleIcon = r.icon;
+                        return (
+                          <button
+                            key={r.key}
+                            type="button"
+                            onClick={() => selectFormRole(r.key)}
+                            className={`p-3 rounded-[16px] text-left cursor-pointer transition-all flex items-center justify-between gap-2 select-none active:scale-95 ${
+                              isSelected
+                                ? 'bg-[#EEF2FF] text-[#4F46E5] border border-[#6366F1] shadow-[2px_2px_8px_rgba(99,102,241,0.2),-2px_-2px_8px_rgba(255,255,255,0.9)] dark:bg-indigo-950/60 dark:text-indigo-300 font-bold'
+                                : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 shadow-[2px_2px_6px_rgba(170,185,220,0.15),-2px_-2px_6px_rgba(255,255,255,0.9)] hover:bg-[#F4F7FC] font-medium border border-transparent'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <RoleIcon className={`h-4 w-4 shrink-0 ${isSelected ? 'text-[#6366F1] dark:text-indigo-400' : 'text-slate-400'}`} />
+                              <span className="text-xs truncate">{r.label}</span>
+                            </div>
+                            {isSelected && (
+                              <div className="w-4 h-4 rounded-full bg-[#6366F1] text-white flex items-center justify-center shrink-0">
+                                <Check className="h-2.5 w-2.5 stroke-[3]" />
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </form>
+            </div>
+
+            {/* Modal Actions Footer - Fixed at bottom */}
+            <div className="p-4 sm:p-6 pt-3 sm:pt-4 border-t border-slate-100 dark:border-slate-800/80 bg-[#F8FAFD] dark:bg-[#131d38] space-y-2 shrink-0">
+              <button
+                type="submit"
+                form="edit-user-form"
+                className="w-full py-3.5 px-4 bg-[#6366F1] hover:bg-[#4F46E5] text-white rounded-[16px] text-xs font-bold shadow-[0_4px_14px_rgba(99,102,241,0.35)] cursor-pointer transition flex items-center justify-center gap-2 active:scale-98"
+              >
+                <Save className="h-4 w-4 stroke-[2.2]" />
+                <span>Save Changes</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditingUser(null)}
+                className="w-full py-3 px-4 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 rounded-[16px] text-xs font-bold shadow-[2px_2px_8px_rgba(170,185,220,0.18),-2px_-2px_8px_rgba(255,255,255,0.95)] cursor-pointer transition flex items-center justify-center gap-2"
+              >
+                <span>Cancel</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deletingUser && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in overscroll-contain"
+          onClick={e => {
+            if (e.target === e.currentTarget) setDeletingUser(null);
+          }}
+        >
+          <div 
+            className="bg-white dark:bg-[#131d38] rounded-[24px] max-w-sm w-full p-6 shadow-[10px_10px_30px_rgba(163,175,205,0.3)] space-y-4 border border-white/60 dark:border-slate-800 text-center animate-in zoom-in-95"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="w-12 h-12 rounded-[16px] bg-red-50 dark:bg-red-950/60 text-red-600 dark:text-red-400 flex items-center justify-center mx-auto shadow-xs">
+              <UserX className="h-6 w-6" />
+            </div>
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">Delete User Account?</h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Are you sure you want to remove <strong className="text-slate-900 dark:text-white">{deletingUser.displayName}</strong> (@{deletingUser.username})? This action cannot be undone.
+            </p>
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                className="flex-1 py-3 px-4 bg-red-600 hover:bg-red-700 text-white rounded-[14px] text-xs font-bold shadow-sm cursor-pointer transition active:scale-95"
+              >
+                Yes, Delete
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeletingUser(null)}
+                className="flex-1 py-3 px-4 bg-[#F4F7FC] hover:bg-[#EDF2F9] dark:bg-slate-800 dark:hover:bg-slate-700 rounded-[14px] text-xs font-bold text-slate-600 dark:text-slate-300 cursor-pointer transition active:scale-95"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create New Role Modal */}
+      {showAddRoleModal && (
+        <div 
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in overscroll-contain"
+          onClick={e => {
+            if (e.target === e.currentTarget) {
+              setShowAddRoleModal(false);
+              setNewRoleName('');
+              setRoleModalError('');
+            }
+          }}
+        >
+          <div 
+            className="bg-[#F8FAFD] dark:bg-[#131d38] rounded-[24px] max-w-md w-full shadow-[10px_10px_35px_rgba(0,0,0,0.25)] border border-white/60 dark:border-slate-800 text-left animate-in zoom-in-95 overflow-hidden flex flex-col"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="p-5 sm:p-6 pb-4 border-b border-slate-100 dark:border-slate-800/80 flex items-center justify-between bg-white dark:bg-slate-900/50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-[14px] bg-[#EEF2FF] dark:bg-indigo-950/60 text-[#6366F1] dark:text-indigo-400 flex items-center justify-center shadow-xs">
+                  <Shield className="h-5 w-5 stroke-[2]" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">Add New Role</h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">Create a new assignable role for user accounts</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddRoleModal(false);
+                  setNewRoleName('');
+                  setRoleModalError('');
+                }}
+                className="w-8 h-8 rounded-[12px] bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 flex items-center justify-center transition cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <form onSubmit={handleAddNewRoleSubmit} className="p-5 sm:p-6 space-y-4">
+              {roleModalError && (
+                <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-[14px] text-red-600 dark:text-red-400 text-xs font-semibold">
+                  {roleModalError}
+                </div>
+              )}
+
+              <div className="rounded-[18px] bg-white dark:bg-slate-900 p-3.5 shadow-[3px_3px_10px_rgba(170,185,220,0.18),-3px_-3px_10px_rgba(255,255,255,0.9)] flex items-center gap-3 border border-slate-100 dark:border-slate-800/60">
+                <div className="w-9 h-9 rounded-[12px] bg-[#EEF2FF] dark:bg-indigo-950/60 text-[#6366F1] dark:text-indigo-400 flex items-center justify-center shrink-0">
+                  <Tag className="h-4.5 w-4.5" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 block leading-tight">
+                    Role Name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    autoFocus
+                    value={newRoleName}
+                    onChange={e => setNewRoleName(e.target.value)}
+                    placeholder="e.g. Quality Auditor, Shift Incharge..."
+                    className="w-full text-xs font-semibold text-slate-900 dark:text-white placeholder-slate-400 bg-transparent border-none focus:outline-none p-0 mt-1"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 flex gap-2.5">
+                <button
+                  type="submit"
+                  className="flex-1 py-3 px-4 bg-[#6366F1] hover:bg-[#4F46E5] text-white rounded-[16px] text-xs font-bold shadow-[0_4px_14px_rgba(99,102,241,0.35)] cursor-pointer transition flex items-center justify-center gap-2 active:scale-95"
+                >
+                  <Plus className="h-4 w-4 stroke-[2.2]" />
+                  <span>Create Role</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddRoleModal(false);
+                    setNewRoleName('');
+                    setRoleModalError('');
+                  }}
+                  className="py-3 px-4 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 rounded-[16px] text-xs font-bold shadow-[2px_2px_8px_rgba(170,185,220,0.18),-2px_-2px_8px_rgba(255,255,255,0.95)] cursor-pointer transition"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete / Manage Roles Modal */}
+      {showDeleteRolesModal && (
+        <div 
+          className="fixed inset-0 z-[65] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in overscroll-contain"
+          onClick={e => {
+            if (e.target === e.currentTarget) {
+              setShowDeleteRolesModal(false);
+              setRoleSearchTerm('');
+              setDeletingRoleKey(null);
+            }
+          }}
+        >
+          <div 
+            className="bg-[#F8FAFD] dark:bg-[#131d38] rounded-[24px] max-w-lg w-full shadow-[10px_10px_35px_rgba(0,0,0,0.25)] border border-white/60 dark:border-slate-800 text-left animate-in zoom-in-95 overflow-hidden flex flex-col max-h-[85vh]"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="p-5 sm:p-6 pb-4 border-b border-slate-100 dark:border-slate-800/80 flex items-center justify-between bg-white dark:bg-slate-900/50 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-[14px] bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center shadow-xs">
+                  <Trash2 className="h-5 w-5 stroke-[2]" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">Delete &amp; Manage Roles</h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">View all roles, check user allocations, and remove unnecessary roles</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDeleteRolesModal(false);
+                  setRoleSearchTerm('');
+                  setDeletingRoleKey(null);
+                }}
+                className="w-8 h-8 rounded-[12px] bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 flex items-center justify-center transition cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Search Input Filter */}
+            <div className="p-4 sm:px-6 bg-white dark:bg-slate-900/30 border-b border-slate-100 dark:border-slate-800/60 shrink-0">
+              <div className="relative">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                <input
+                  type="text"
+                  value={roleSearchTerm}
+                  onChange={e => setRoleSearchTerm(e.target.value)}
+                  placeholder="Search role by name..."
+                  className="w-full pl-10 pr-9 py-2.5 bg-[#F4F7FC] dark:bg-slate-900 border-none rounded-[14px] text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-rose-500/40 shadow-[inset_1.5px_1.5px_3px_rgba(180,195,230,0.2)] dark:shadow-none"
+                />
+                {roleSearchTerm && (
+                  <button 
+                    type="button"
+                    onClick={() => setRoleSearchTerm('')} 
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Roles List */}
+            <div className="p-4 sm:p-6 overflow-y-auto space-y-2.5 flex-1">
+              {filteredRolesList.length === 0 ? (
+                <div className="py-8 text-center text-slate-400 text-xs">
+                  No roles match "{roleSearchTerm}"
+                </div>
+              ) : (
+                filteredRolesList.map(r => {
+                  const RoleIcon = r.icon;
+                  const assignedCount = roleUserCountMap[(r.key as string).toLowerCase()] || 0;
+                  const isConfirmingDelete = deletingRoleKey === r.key;
+
+                  return (
+                    <div
+                      key={r.key}
+                      className="p-3.5 rounded-[16px] bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800/80 shadow-[2px_2px_8px_rgba(170,185,220,0.12),-2px_-2px_8px_rgba(255,255,255,0.9)] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-9 h-9 rounded-[12px] bg-[#EEF2FF] dark:bg-indigo-950/60 text-[#6366F1] dark:text-indigo-400 flex items-center justify-center shrink-0">
+                          <RoleIcon className="h-4.5 w-4.5" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                              {r.label}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5 mt-0.5">
+                            <UserIcon className="h-3 w-3" />
+                            <span>{assignedCount === 1 ? '1 User Assigned' : `${assignedCount} Users Assigned`}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Right Action: Delete option for all roles */}
+                      <div className="flex items-center justify-end shrink-0">
+                        {isConfirmingDelete ? (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteRole(r.key as string)}
+                              className="px-3 py-1.5 rounded-[10px] bg-red-600 hover:bg-red-700 text-white font-bold text-xs shadow-xs transition active:scale-95 cursor-pointer"
+                            >
+                              Confirm Delete
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeletingRoleKey(null)}
+                              className="px-2.5 py-1.5 rounded-[10px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 font-bold text-xs cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setDeletingRoleKey(r.key as string)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[12px] text-xs font-bold text-red-600 dark:text-red-400 bg-red-50 hover:bg-red-100 dark:bg-red-950/60 dark:hover:bg-red-900/60 transition cursor-pointer active:scale-95 border border-red-200/60 dark:border-red-800/60 shadow-xs"
+                            title={`Delete role "${r.label}"`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            <span>Delete</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 sm:p-5 border-t border-slate-100 dark:border-slate-800/80 bg-white dark:bg-slate-900/50 flex items-center justify-between shrink-0">
+              <span className="text-xs text-slate-500 dark:text-slate-400">
+                Total Roles: <strong className="text-slate-800 dark:text-white">{allRoles.length}</strong> ({customRoles.length} Custom)
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDeleteRolesModal(false);
+                  setRoleSearchTerm('');
+                  setDeletingRoleKey(null);
+                }}
+                className="px-4 py-2 rounded-[14px] bg-[#6366F1] hover:bg-[#4F46E5] text-white text-xs font-bold shadow-xs cursor-pointer transition"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+};
+
+export default UserManagementView;
+

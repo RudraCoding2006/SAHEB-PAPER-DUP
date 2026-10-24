@@ -1,0 +1,5658 @@
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { useAuth } from '../auth/AuthContext';
+import { useTranslation } from 'react-i18next';
+import {
+  getPackingSlips,
+  getNextPackingSlipNo,
+  savePackingSlip,
+  confirmDispatch,
+  deletePackingSlip,
+  clearAllPackingSlips,
+  getReels,
+  getParties,
+  getVehicles,
+  getPendingOrders,
+  getNextOrderNo,
+  savePendingOrder,
+  getProducts,
+} from '../../data/index';
+import XLSX from 'xlsx-js-style';
+import type { PackingSlip, Reel, PendingOrder, PartyItem, VehicleItem, ProductItem } from '../../data/types';
+import { exportExcelWorkbook } from '../../utils/fileDownloader';
+import { exportDispatchChallanExcel, printOrShareDispatchReceipt } from '../../utils/dispatchReceiptService';
+import { createStyledWorksheet } from '../../utils/excelStyler';
+import { CustomDatePickerModal } from '../../components/CustomDatePickerModal';
+import { COMPANY_CONFIG } from '../../config/company';
+import { DataFilterBar } from '../../components/DataFilterBar';
+import { CustomSearchableSelect } from '../../components/CustomSearchableSelect';
+import { useBodyScrollLock } from '../../hooks/useBodyScrollLock';
+import { useMobileBackHandler } from '../../hooks/useMobileBackHandler';
+import { useDataSync } from '../../hooks/useDataSync';
+import {
+  Truck,
+  Plus,
+  FileText,
+  CheckCircle,
+  FileSpreadsheet,
+  AlertTriangle,
+  Printer,
+  Trash2,
+  Search,
+  ListFilter,
+  PackageCheck,
+  Package,
+  Calendar,
+  ChevronDown,
+  ChevronUp,
+  Zap,
+  SlidersHorizontal,
+  LayoutGrid,
+  List,
+  CheckSquare,
+  Square,
+  X,
+  RotateCcw,
+  ScanBarcode,
+  Eye,
+  Info,
+  Building2,
+  Check,
+  Pencil,
+  MoreVertical,
+  Lock,
+  QrCode,
+  Tag,
+  Hash,
+  Layers,
+  Scale,
+  Target,
+  ChevronRight,
+} from 'lucide-react';
+
+import { WorkflowStepBadge, WORKFLOW_STEPS } from '../../components/WorkflowStepBadge';
+import { DispatchedReelsVault } from './DispatchedReelsVault';
+import { QRScannerView } from '../rewinder/QRScannerView';
+import { useDateFilter, isDateInTimeframe } from '../../context/DateFilterContext';
+import { PrintLabelModal } from '../../components/PrintLabelModal';
+import { formatDiaInCm } from '../../components/ReelPrintLabel';
+
+interface DispatchViewProps {
+  initialTab?: 'orders' | 'create_slip' | 'slips_list' | 'dispatched_vault' | 'qr_scanner';
+  hideTabs?: boolean;
+  hideHeader?: boolean;
+  onOpenScanner?: () => void;
+}
+
+export const DispatchView: React.FC<DispatchViewProps> = ({ initialTab = 'orders', hideTabs = false, hideHeader = false, onOpenScanner }) => {
+  const { t } = useTranslation();
+  const { user, isViewer } = useAuth();
+  const { timeframe, selectedDate } = useDateFilter();
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const [slips, setSlips] = useState<PackingSlip[]>(() => getPackingSlips());
+  const [reels, setReels] = useState<Reel[]>(() => getReels());
+  const [orders, setOrders] = useState<PendingOrder[]>(() => getPendingOrders());
+  const [parties, setParties] = useState<PartyItem[]>(() => getParties());
+  const [vehicles, setVehicles] = useState<VehicleItem[]>(() => getVehicles());
+  const [products, setProducts] = useState<ProductItem[]>(() => getProducts());
+
+  const syncTick = useDataSync(['parties', 'vendors', 'vehicles', 'products', 'pending_orders', 'packing_slips', 'reels', 'dispatch_records', 'challans', 'saheb_parties']);
+
+  useEffect(() => {
+    setSlips(getPackingSlips());
+    setReels(getReels());
+    setOrders(getPendingOrders());
+    setParties(getParties());
+    setVehicles(getVehicles());
+    setProducts(getProducts());
+  }, [syncTick]);
+
+  const activeParties = useMemo(() => parties.filter(p => p.active !== false), [parties]);
+
+  // Tab View Toggle - Determine from URL pathname or initialTab prop
+  const [activeTab, setActiveTab] = useState<'orders' | 'create_slip' | 'slips_list' | 'dispatched_vault' | 'qr_scanner'>(() => {
+    const isDesktop = typeof window !== 'undefined' && window.innerWidth >= 768;
+    if (location.pathname.includes('qr-scanner')) {
+      return isDesktop ? 'create_slip' : 'qr_scanner';
+    }
+    if (location.pathname.includes('dispatched-reels') || location.pathname.includes('dispatched-vault')) return 'dispatched_vault';
+    if (location.pathname.includes('packing-slips')) return 'slips_list';
+    if (location.pathname.includes('draft-packing-slip')) return 'create_slip';
+    return initialTab === 'qr_scanner' && isDesktop ? 'create_slip' : initialTab;
+  });
+
+  // Sync tab with URL location changes & redirect desktop to draft-packing-slip if on qr_scanner
+  useEffect(() => {
+    const isDesktop = typeof window !== 'undefined' && window.innerWidth >= 768;
+    if (location.pathname.includes('qr-scanner')) {
+      if (isDesktop) {
+        setActiveTab('create_slip');
+        navigate('/dispatch-receipt/draft-packing-slip', { replace: true });
+      } else {
+        setActiveTab('qr_scanner');
+      }
+    } else if (location.pathname.includes('dispatched-reels') || location.pathname.includes('dispatched-vault')) {
+      setActiveTab('dispatched_vault');
+    } else if (location.pathname.includes('packing-slips')) {
+      setActiveTab('slips_list');
+    } else if (location.pathname.includes('draft-packing-slip')) {
+      setActiveTab('create_slip');
+    } else if (initialTab) {
+      if (initialTab === 'qr_scanner' && isDesktop) {
+        setActiveTab('create_slip');
+        navigate('/dispatch-receipt/draft-packing-slip', { replace: true });
+      } else {
+        setActiveTab(initialTab);
+      }
+    }
+    setReels(getReels());
+    setSlips(getPackingSlips());
+    setOrders(getPendingOrders());
+  }, [location.pathname, initialTab, navigate]);
+
+  // Responsive Guard: If user was on mobile QR scanner and maximizes/resizes window to desktop,
+  // automatically redirect to Draft Packing Slip so desktop is never blank
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth >= 768) {
+        if (location.pathname.includes('qr-scanner') || activeTab === 'qr_scanner') {
+          setActiveTab('create_slip');
+          navigate('/dispatch-receipt/draft-packing-slip', { replace: true });
+        }
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [location.pathname, activeTab, navigate]);
+
+  // Real-time listener: instant UI update whenever Supabase syncs new data
+  useEffect(() => {
+    const handleDataUpdate = (e?: any) => {
+      const tables: string[] = e?.detail?.tables || (e?.detail?.table ? [e.detail.table] : []);
+      const isAll = tables.length === 0 || tables.includes('all');
+
+      if (isAll || tables.some(t => t.includes('order') || t.includes('pending'))) {
+        setOrders(getPendingOrders());
+      }
+      if (isAll || tables.some(t => t.includes('reel') || t.includes('rewinder') || t.includes('stock'))) {
+        setReels(getReels());
+      }
+      if (isAll || tables.some(t => t.includes('slip') || t.includes('dispatch') || t.includes('packing'))) {
+        setSlips(getPackingSlips());
+      }
+    };
+
+    window.addEventListener('saheb_data_updated', handleDataUpdate);
+    window.addEventListener('storage', handleDataUpdate);
+    return () => {
+      window.removeEventListener('saheb_data_updated', handleDataUpdate);
+      window.removeEventListener('storage', handleDataUpdate);
+    };
+  }, []);
+
+  const handleTabChange = (tab: 'orders' | 'create_slip' | 'slips_list' | 'dispatched_vault' | 'qr_scanner') => {
+    setActiveTab(tab);
+    setReels(getReels());
+    setSlips(getPackingSlips());
+    setOrders(getPendingOrders());
+    setSuccessMsg('');
+    setErrorMsg('');
+    if (!hideTabs) {
+      if (tab === 'create_slip') {
+        navigate('/dispatch-receipt/draft-packing-slip');
+      } else if (tab === 'slips_list') {
+        navigate('/dispatch-receipt/packing-slips-&-challans');
+      } else if (tab === 'dispatched_vault') {
+        navigate('/dispatch-receipt/dispatched-reels');
+      } else if (tab === 'qr_scanner') {
+        navigate('/dispatch-receipt/qr-scanner');
+      }
+    }
+  };
+
+  // 4. Edit Delivery Challan Modal State
+  const [editingSlip, setEditingSlip] = useState<PackingSlip | null>(null);
+  const [editOrderNo, setEditOrderNo] = useState('');
+  const [editDate, setEditDate] = useState('');
+  const [editPartyId, setEditPartyId] = useState('');
+  const [editVehicleId, setEditVehicleId] = useState('');
+  const [editReelNos, setEditReelNos] = useState<string[]>([]);
+  const [editReelInput, setEditReelInput] = useState('');
+  const [editModalError, setEditModalError] = useState('');
+
+  // 5. In-Stock Reels Selection Modal (within Edit Challan)
+  const [isEditStockPickerOpen, setIsEditStockPickerOpen] = useState(false);
+  const [editPickerSearch, setEditPickerSearch] = useState('');
+  const [editPickerProductFilter, setEditPickerProductFilter] = useState<'ALL' | string>('ALL');
+  const [editPickerGsmFilter, setEditPickerGsmFilter] = useState<'ALL' | number>('ALL');
+  const [editPickerSizeFilter, setEditPickerSizeFilter] = useState<'ALL' | number>('ALL');
+  const [editPickerPlyFilter, setEditPickerPlyFilter] = useState<'ALL' | number>('ALL');
+  const [editPickerGradeFilter, setEditPickerGradeFilter] = useState<'ALL' | 'A' | 'B'>('ALL');
+  const [editPickerViewMode, setEditPickerViewMode] = useState<'grid' | 'table'>('grid');
+  const [editPickerBarcodeInput, setEditPickerBarcodeInput] = useState('');
+  const [editPickerSelectedNos, setEditPickerSelectedNos] = useState<string[]>([]);
+
+  // 6. Three-dots Action Menu Dropdown State
+  const [openMenuSlipId, setOpenMenuSlipId] = useState<string | null>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
+
+  // Hook Android back button for DispatchView modals
+  useMobileBackHandler(!!editingSlip, () => setEditingSlip(null), 'dispatchEditSlip');
+  useMobileBackHandler(isEditStockPickerOpen, () => setIsEditStockPickerOpen(false), 'dispatchEditPicker');
+
+  useEffect(() => {
+    setReels(getReels());
+  }, [activeTab]);
+
+  // Tactile Web Audio Beep Sound
+  const playBeep = () => {
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.1);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.1);
+    } catch (e) {}
+  };
+
+  // Success / Error States
+  const [successMsg, setSuccessMsg] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+
+  // Search Queries
+  const [orderSearchQuery, setOrderSearchQuery] = useState('');
+  const [slipSearchQuery, setSlipSearchQuery] = useState('');
+  const [showAllReels, setShowAllReels] = useState(false);
+
+  // Fast Reel Selection Filter States (Multi-select)
+  const [reelSearchQuery, setReelSearchQuery] = useState('');
+  const [reelProductFilters, setReelProductFilters] = useState<string[]>([]);
+  const [reelGsmFilters, setReelGsmFilters] = useState<number[]>([]);
+  const [reelSizeFilters, setReelSizeFilters] = useState<number[]>([]);
+  const [reelPlyFilters, setReelPlyFilters] = useState<number[]>([]);
+  const [reelGradeFilters, setReelGradeFilters] = useState<string[]>([]);
+  const [reelViewMode, setReelViewMode] = useState<'grid' | 'table'>('grid');
+  const [barcodeGunInput, setBarcodeGunInput] = useState('');
+
+  // Warehouse Stock Product Summary States
+  const [summarySearchQuery, setSummarySearchQuery] = useState('');
+  const [expandedProducts, setExpandedProducts] = useState<Record<string, boolean>>({});
+  const [expandedSpecs, setExpandedSpecs] = useState<Record<string, boolean>>({});
+
+  const [orderStatusFilter, setOrderStatusFilter] = useState<'ACTIVE' | 'COMPLETED' | 'ALL'>('ACTIVE');
+
+  const filteredOrders = useMemo(() => {
+    let list = orders;
+    if (orderStatusFilter === 'ACTIVE') {
+      list = list.filter(o => o.status !== 'COMPLETED');
+    } else if (orderStatusFilter === 'COMPLETED') {
+      list = list.filter(o => o.status === 'COMPLETED');
+    }
+    const q = orderSearchQuery.toLowerCase().trim();
+    if (!q) return list;
+    return list.filter(order => {
+      const partyObj = parties.find(p => p.id === order.partyId);
+      const prodObj = products.find(p => p.id === order.productId);
+      return (
+        (order.orderNo && order.orderNo.toLowerCase().includes(q)) ||
+        (partyObj && partyObj.name.toLowerCase().includes(q)) ||
+        (prodObj && prodObj.name.toLowerCase().includes(q)) ||
+        order.id.toLowerCase().includes(q)
+      );
+    });
+  }, [orders, orderStatusFilter, orderSearchQuery, parties, products]);
+
+  // Packing Slip List Filter States
+  const [slipStatusFilter, setSlipStatusFilter] = useState<'ALL' | 'DRAFT' | 'CONFIRMED'>('ALL');
+  const [slipPartyFilter, setSlipPartyFilter] = useState<'ALL' | string>('ALL');
+
+  const filteredSlips = useMemo(() => {
+    const q = slipSearchQuery.toLowerCase().trim();
+    return slips.filter(slip => {
+      if (slipStatusFilter !== 'ALL' && slip.status !== slipStatusFilter) return false;
+      if (slipPartyFilter !== 'ALL' && slip.partyId !== slipPartyFilter) return false;
+      if (q) {
+        const partyObj = parties.find(p => p.id === slip.partyId);
+        const vehicleObj = vehicles.find(v => v.id === slip.vehicleId);
+        const matchNo = slip.slipNo.toLowerCase().includes(q);
+        const matchDate = slip.date.toLowerCase().includes(q);
+        const matchParty = partyObj && partyObj.name.toLowerCase().includes(q);
+        const matchVehicle = vehicleObj && (vehicleObj.vehicleNo.toLowerCase().includes(q) || (slip.vehicleId || '').toLowerCase().includes(q));
+        const matchOrder = slip.orderNo && slip.orderNo.toLowerCase().includes(q);
+        if (!matchNo && !matchDate && !matchParty && !matchVehicle && !matchOrder) return false;
+      }
+      return true;
+    });
+  }, [slips, slipSearchQuery, slipStatusFilter, slipPartyFilter, parties, vehicles]);
+
+  // 1. Order Creation States (Multi-Product Support)
+  interface OrderProductLine {
+    id: string;
+    productId: string;
+    gsm: string;
+    size: string;
+    ply: string;
+    weightTons: string;
+    qty: string;
+  }
+
+  const [selectedPartyId, setSelectedPartyId] = useState('');
+  const [orderNo, setOrderNo] = useState('');
+  const defaultOrderNo = useMemo(() => {
+    return getNextOrderNo();
+  }, [orders]);
+  const [orderProductLines, setOrderProductLines] = useState<OrderProductLine[]>([
+    {
+      id: `item-0-${Date.now()}`,
+      productId: '',
+      gsm: '16',
+      size: '30',
+      ply: '2',
+      weightTons: '25000',
+      qty: '20',
+    },
+  ]);
+  const [orderReceiveDate, setOrderReceiveDate] = useState(() => new Date().toISOString().substring(0, 10));
+  const [openOrderDuePicker, setOpenOrderDuePicker] = useState(false);
+
+  // 2. Packing Slip Form States
+  const [slipNo, setSlipNo] = useState('');
+  const [slipOrderNo, setSlipOrderNo] = useState('');
+  const [slipDate, setSlipDate] = useState(() => new Date().toISOString().substring(0, 10));
+  const [openSlipDatePicker, setOpenSlipDatePicker] = useState(false);
+  const [slipPartyId, setSlipPartyId] = useState('');
+  const [slipVehicleId, setSlipVehicleId] = useState('');
+  const [selectedReelNos, setSelectedReelNos] = useState<string[]>([]);
+  const [receiverSig, setReceiverSig] = useState('');
+
+  const partyPendingOrders = useMemo(() => {
+    if (!slipPartyId) return [];
+    return orders.filter(o => o.partyId === slipPartyId && o.status !== 'COMPLETED');
+  }, [orders, slipPartyId]);
+
+  // Custom Party Selection Dropdown States
+  const [isPartyDropdownOpen, setIsPartyDropdownOpen] = useState(false);
+  const [partySearchQuery, setPartySearchQuery] = useState('');
+  const partyDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Custom Order No Selection Dropdown States
+  const [isOrderDropdownOpen, setIsOrderDropdownOpen] = useState(false);
+  const [orderDropdownSearchQuery, setOrderDropdownSearchQuery] = useState('');
+  const orderDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Quick Reel Specs & QC Inspection Modal States
+  const [viewingReelDetails, setViewingReelDetails] = useState<Reel | null>(null);
+  const [expandedReelInfo, setExpandedReelInfo] = useState<Record<string, boolean>>({});
+  const [showPrintLabelModal, setShowPrintLabelModal] = useState(false);
+  const [selectedReelForPrint, setSelectedReelForPrint] = useState<Reel | null>(null);
+
+  useMobileBackHandler(!!viewingReelDetails, () => setViewingReelDetails(null), 'dispatchViewingReelDetails');
+  useMobileBackHandler(showPrintLabelModal, () => setShowPrintLabelModal(false), 'dispatchPrintLabelModal');
+
+  const toggleReelInfo = (reelNo: string) => {
+    setExpandedReelInfo(prev => ({
+      ...prev,
+      [reelNo]: !prev[reelNo],
+    }));
+  };
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (partyDropdownRef.current && !partyDropdownRef.current.contains(event.target as Node)) {
+        setIsPartyDropdownOpen(false);
+      }
+      if (orderDropdownRef.current && !orderDropdownRef.current.contains(event.target as Node)) {
+        setIsOrderDropdownOpen(false);
+      }
+    };
+    if (isPartyDropdownOpen || isOrderDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isPartyDropdownOpen, isOrderDropdownOpen]);
+
+  // Grouped active pending orders for selection in Draft Delivery Challan
+  const availableOrderOptions = useMemo(() => {
+    const activeOrders = orders.filter(o => o.status !== 'COMPLETED');
+    const groupsMap = new Map<string, {
+      orderNo: string;
+      partyId: string;
+      partyName: string;
+      status: PendingOrder['status'];
+      totalQty: number;
+      dispatchedQty: number;
+      remainingQty: number;
+      totalWeightKg: number;
+      remainingWeightKg: number;
+      productsSummary: string;
+      receiveDate?: string;
+    }>();
+
+    [...activeOrders].reverse().forEach(order => {
+      const key = (order.orderNo || order.id).trim();
+      if (!key) return;
+
+      const party = parties.find(p => p.id === order.partyId);
+      const prod = products.find(p => p.id === order.productId);
+      const prodText = prod ? `${prod.name} (${order.gsm}G, ${order.size}cm)` : `${order.gsm}G, ${order.size}cm`;
+      const weightKg = Math.round((order.weightTons || 0) * 1000);
+
+      // Check already dispatched weight for this specific order from finalized packing slips
+      const keyUpper = key.toUpperCase();
+      const orderSlips = slips.filter(s =>
+        (s.status === 'DISPATCHED' || s.status === 'CONFIRMED') &&
+        (s.orderNo || '').trim().toUpperCase() === keyUpper
+      );
+      const orderReelNos = new Set(orderSlips.flatMap(s => s.reelNos || []));
+      const directDispatchedKg = reels
+        .filter(r => orderReelNos.has(r.reelNo))
+        .reduce((sum, r) => sum + (r.weight || 0), 0);
+
+      const dispKg = directDispatchedKg > 0
+        ? directDispatchedKg
+        : (order.qty > 0 && order.dispatchedQty > 0 ? Math.round((order.dispatchedQty / order.qty) * weightKg) : 0);
+      const remWeightKg = Math.max(0, weightKg - dispKg);
+      const dispQty = order.dispatchedQty || orderReelNos.size || 0;
+      const remQty = Math.max(0, order.qty - dispQty);
+
+      if (groupsMap.has(key)) {
+        const g = groupsMap.get(key)!;
+        g.totalQty += order.qty;
+        g.dispatchedQty += dispQty;
+        g.remainingQty += remQty;
+        g.totalWeightKg += weightKg;
+        g.remainingWeightKg += remWeightKg;
+        if (!g.productsSummary.includes(prodText)) {
+          g.productsSummary += `, ${prodText}`;
+        }
+      } else {
+        groupsMap.set(key, {
+          orderNo: key,
+          partyId: order.partyId,
+          partyName: party ? party.name : 'Unknown Customer',
+          status: order.status,
+          totalQty: order.qty,
+          dispatchedQty: dispQty,
+          remainingQty: remQty,
+          totalWeightKg: weightKg,
+          remainingWeightKg: remWeightKg,
+          productsSummary: prodText,
+          receiveDate: order.receiveDate,
+        });
+      }
+    });
+
+    let list = Array.from(groupsMap.values());
+    if (slipPartyId) {
+      list = list.filter(g => g.partyId === slipPartyId);
+    }
+    return list;
+  }, [orders, parties, products, slips, reels, slipPartyId]);
+
+  const filteredOrderOptions = useMemo(() => {
+    const q = orderDropdownSearchQuery.toLowerCase().trim();
+    if (!q) return availableOrderOptions;
+    return availableOrderOptions.filter(o =>
+      o.orderNo.toLowerCase().includes(q) ||
+      o.partyName.toLowerCase().includes(q) ||
+      o.productsSummary.toLowerCase().includes(q)
+    );
+  }, [availableOrderOptions, orderDropdownSearchQuery]);
+
+  // Linked Order Summary (for the "Target Weight" box next to Total Loaded)
+  const linkedOrderGroup = useMemo(() => {
+    if (!slipOrderNo.trim()) return null;
+    const cleanNo = slipOrderNo.trim().toUpperCase();
+    const matchingOrders = orders.filter(o =>
+      (o.orderNo && o.orderNo.trim().toUpperCase() === cleanNo) ||
+      o.id.toUpperCase() === cleanNo
+    );
+    if (matchingOrders.length === 0) return null;
+
+    const totalQty = matchingOrders.reduce((sum, o) => sum + (o.qty || 0), 0);
+    const totalWeightKg = matchingOrders.reduce((sum, o) => sum + Math.round((o.weightTons || 0) * 1000), 0);
+
+    // Sum already dispatched reels for this order from finalized/dispatched packing slips
+    const orderSlips = slips.filter(s =>
+      (s.status === 'DISPATCHED' || s.status === 'CONFIRMED') &&
+      (s.orderNo || '').trim().toUpperCase() === cleanNo
+    );
+    const orderReelNos = new Set(orderSlips.flatMap(s => s.reelNos || []));
+    const alreadyDispatchedWeightKg = reels
+      .filter(r => orderReelNos.has(r.reelNo))
+      .reduce((sum, r) => sum + (r.weight || 0), 0);
+
+    const dispatchedQty = orderReelNos.size || matchingOrders.reduce((sum, o) => sum + (o.dispatchedQty || 0), 0);
+    const remainingQty = Math.max(0, totalQty - dispatchedQty);
+    const remainingWeightKg = Math.max(0, totalWeightKg - alreadyDispatchedWeightKg);
+
+    return {
+      orderNo: slipOrderNo,
+      totalQty,
+      dispatchedQty,
+      remainingQty,
+      totalWeightKg,
+      alreadyDispatchedWeightKg,
+      remainingWeightKg,
+      matchingOrders,
+    };
+  }, [orders, slips, reels, slipOrderNo]);
+
+  const handleSelectOrder = (orderNo: string, partyId: string) => {
+    setSlipOrderNo(orderNo);
+    if (partyId) {
+      setSlipPartyId(partyId);
+    }
+    setIsOrderDropdownOpen(false);
+  };
+
+  const handleClearOrder = () => {
+    setSlipOrderNo('');
+  };
+
+  const handleStartChallanFromOrder = (order: PendingOrder) => {
+    setSlipOrderNo(order.orderNo || order.id);
+    setSlipPartyId(order.partyId);
+    setActiveTab('create_slip');
+    navigate('/dispatch-receipt/draft-packing-slip');
+  };
+
+  const filteredPartyOptions = useMemo(() => {
+    const q = partySearchQuery.toLowerCase().trim();
+    const activeParties = parties.filter(p => p.active !== false);
+    if (!q) return activeParties;
+    return activeParties.filter(p =>
+      p.name.toLowerCase().includes(q) ||
+      (p.contact && p.contact.toLowerCase().includes(q)) ||
+      (p.address && p.address.toLowerCase().includes(q))
+    );
+  }, [parties, partySearchQuery]);
+
+  const selectedParty = useMemo(() => {
+    return parties.find(p => p.id === slipPartyId);
+  }, [parties, slipPartyId]);
+
+  // 3. Active Challan Detail Modal (for PDF/Excel print review)
+  const [viewingSlip, setViewingSlip] = useState<PackingSlip | null>(null);
+  const [directPrintSlip, setDirectPrintSlip] = useState<PackingSlip | null>(null);
+  const [isPrintingReceipt, setIsPrintingReceipt] = useState(false);
+  const [receiptPage, setReceiptPage] = useState(1);
+  const [receiptGroupMode, setReceiptGroupMode] = useState<'grouped' | 'sequential'>('grouped');
+  const [receiptViewMode, setReceiptViewMode] = useState<'paged' | 'continuous'>('continuous');
+
+  useMobileBackHandler(!!viewingSlip, () => setViewingSlip(null), 'dispatchViewingSlip');
+  useMobileBackHandler(!!directPrintSlip, () => setDirectPrintSlip(null), 'dispatchDirectPrintSlip');
+
+  useBodyScrollLock(!!viewingSlip || !!editingSlip || isEditStockPickerOpen || !!viewingReelDetails || showPrintLabelModal);
+
+  // Auto-generate sequential challan / receipt number (Standard format: PS-1, PS-2, ...)
+  const defaultReceiptNo = useMemo(() => {
+    return getNextPackingSlipNo();
+  }, [slips]);
+
+  const autoSlipNo = useMemo(() => {
+    const raw = slipNo.trim();
+    if (!raw) return defaultReceiptNo;
+    // If user enters purely numeric digits like "521197", auto-prefix with "PS-"
+    if (/^\d+$/.test(raw)) {
+      return `PS-${raw}`;
+    }
+    return raw;
+  }, [slipNo, defaultReceiptNo]);
+
+  // Filter available reels in stock for Packing Slip selection (strictly in-stock warehouse reels)
+  const availableReels = useMemo(() => {
+    return reels.filter(r => (r.status === 'IN_STOCK' || r.status === 'IN_STOCK_B' || r.status === 'QC_PASSED') && !r.challanNo);
+  }, [reels]);
+
+  // Unique Products present in available reels for quick filter pills
+  const uniqueProducts = useMemo(() => {
+    const set = new Set<string>();
+    availableReels.forEach(r => {
+      if (r.product) set.add(r.product);
+    });
+    return Array.from(set).sort();
+  }, [availableReels]);
+
+  // Unique GSMs present in available reels
+  const uniqueGsms = useMemo(() => {
+    const set = new Set<number>();
+    availableReels.forEach(r => {
+      if (r.gsm) set.add(r.gsm);
+    });
+    return Array.from(set).sort((a, b) => a - b);
+  }, [availableReels]);
+
+  // Unique Sizes present in available reels
+  const uniqueSizes = useMemo(() => {
+    const set = new Set<number>();
+    availableReels.forEach(r => {
+      if (r.size) set.add(r.size);
+    });
+    return Array.from(set).sort((a, b) => a - b);
+  }, [availableReels]);
+
+  // Unique Plys present in available reels
+  const uniquePlys = useMemo(() => {
+    const set = new Set<number>();
+    availableReels.forEach(r => {
+      if (r.ply) set.add(r.ply);
+    });
+    return Array.from(set).sort((a, b) => a - b);
+  }, [availableReels]);
+
+  // Multi-select toggle helpers
+  const toggleProductFilter = (prod: string) => {
+    setReelProductFilters(prev =>
+      prev.includes(prod) ? prev.filter(p => p !== prod) : [...prev, prod]
+    );
+  };
+
+  const toggleGsmFilter = (gsm: number) => {
+    setReelGsmFilters(prev =>
+      prev.includes(gsm) ? prev.filter(g => g !== gsm) : [...prev, gsm]
+    );
+  };
+
+  const toggleSizeFilter = (sz: number) => {
+    setReelSizeFilters(prev =>
+      prev.includes(sz) ? prev.filter(s => s !== sz) : [...prev, sz]
+    );
+  };
+
+  const togglePlyFilter = (ply: number) => {
+    setReelPlyFilters(prev =>
+      prev.includes(ply) ? prev.filter(p => p !== ply) : [...prev, ply]
+    );
+  };
+
+  const toggleGradeFilter = (gr: string) => {
+    setReelGradeFilters(prev =>
+      prev.includes(gr) ? prev.filter(g => g !== gr) : [...prev, gr]
+    );
+  };
+
+  const clearAllFilters = () => {
+    setReelProductFilters([]);
+    setReelGsmFilters([]);
+    setReelSizeFilters([]);
+    setReelPlyFilters([]);
+    setReelGradeFilters([]);
+    setReelSearchQuery('');
+  };
+
+  // Real-time filtered available reels (Multi-select)
+  const filteredAvailableReels = useMemo(() => {
+    return availableReels.filter(r => {
+      if (reelProductFilters.length > 0) {
+        const prod = (r.product || '').toLowerCase().trim();
+        const match = reelProductFilters.some(t => {
+          const target = t.toLowerCase().trim();
+          return prod === target || prod.includes(target) || target.includes(prod);
+        });
+        if (!match) return false;
+      }
+      if (reelGsmFilters.length > 0 && !reelGsmFilters.includes(r.gsm)) return false;
+      if (reelSizeFilters.length > 0 && !reelSizeFilters.includes(r.size)) return false;
+      if (reelPlyFilters.length > 0 && !reelPlyFilters.includes(r.ply || 1)) return false;
+      if (reelGradeFilters.length > 0 && !reelGradeFilters.includes((r.qcGrade || 'A').toUpperCase())) return false;
+      if (reelSearchQuery.trim()) {
+        const q = reelSearchQuery.toLowerCase().trim();
+        const matchReelNo = r.reelNo.toLowerCase().includes(q);
+        const matchProd = (r.product || '').toLowerCase().includes(q);
+        const matchGsm = String(r.gsm).includes(q);
+        const matchSize = String(r.size).includes(q);
+        const matchWeight = String(r.weight).includes(q);
+        if (!matchReelNo && !matchProd && !matchGsm && !matchSize && !matchWeight) return false;
+      }
+      return true;
+    });
+  }, [availableReels, reelProductFilters, reelGsmFilters, reelSizeFilters, reelPlyFilters, reelGradeFilters, reelSearchQuery]);
+
+  // Predictive typing suggestions when user types in the rapid entry box
+  const typingReelMatches = useMemo(() => {
+    const q = barcodeGunInput.trim().toLowerCase();
+    if (!q) return [];
+    return availableReels
+      .filter(r => !selectedReelNos.includes(r.reelNo) && (
+        r.reelNo.toLowerCase().includes(q) ||
+        String(r.gsm).includes(q) ||
+        String(r.size).includes(q) ||
+        (r.product || '').toLowerCase().includes(q)
+      ))
+      .slice(0, 4);
+  }, [barcodeGunInput, availableReels, selectedReelNos]);
+
+  // Live selected reels list and aggregated weight for Challan PDF preview
+  const selectedReelsList = useMemo(() => {
+    return availableReels.filter(r => selectedReelNos.includes(r.reelNo));
+  }, [availableReels, selectedReelNos]);
+
+  const totalSelectedWeight = useMemo(() => {
+    return selectedReelsList.reduce((sum, r) => sum + (r.weight || 0), 0);
+  }, [selectedReelsList]);
+
+  // Live selected reels product-wise weight & reels count summary for Challan preview
+  const selectedProductSummary = useMemo(() => {
+    const map = new Map<string, { product: string; count: number; weight: number }>();
+    selectedReelsList.forEach(r => {
+      const prodName = (r.product && r.product.trim()) ? r.product.trim() : 'Standard Grade Paper';
+      if (!map.has(prodName)) {
+        map.set(prodName, { product: prodName, count: 0, weight: 0 });
+      }
+      const entry = map.get(prodName)!;
+      entry.count += 1;
+      entry.weight += (r.weight || 0);
+    });
+    return Array.from(map.values()).sort((a, b) => a.product.localeCompare(b.product));
+  }, [selectedReelsList]);
+
+  // Fast Batch Selection Actions
+  const handleSelectAllFiltered = () => {
+    const allNos = filteredAvailableReels.map(r => r.reelNo);
+    setSelectedReelNos(prev => Array.from(new Set([...prev, ...allNos])));
+    playBeep();
+  };
+
+  const handleDeselectAllFiltered = () => {
+    const filteredSet = new Set(filteredAvailableReels.map(r => r.reelNo));
+    setSelectedReelNos(prev => prev.filter(no => !filteredSet.has(no)));
+    playBeep();
+  };
+
+  const handleSelectTopN = (n: number) => {
+    const unselected = filteredAvailableReels.filter(r => !selectedReelNos.includes(r.reelNo));
+    const toAdd = unselected.slice(0, n).map(r => r.reelNo);
+    if (toAdd.length > 0) {
+      setSelectedReelNos(prev => [...prev, ...toAdd]);
+      playBeep();
+    }
+  };
+
+  const handleBarcodeGunSubmit = (e?: React.FormEvent, customVal?: string) => {
+    if (e) e.preventDefault();
+    const raw = (customVal !== undefined ? customVal : barcodeGunInput).trim();
+    if (!raw) return;
+    const codes = raw.split(/[\s,]+/).filter(Boolean);
+    const validCodesToAdd: string[] = [];
+    codes.forEach(code => {
+      // 1. Exact match first
+      let found = availableReels.find(r => r.reelNo.toUpperCase() === code.toUpperCase());
+      // 2. Partial match (last digits or subcode)
+      if (!found) {
+        found = availableReels.find(r => r.reelNo.toUpperCase().includes(code.toUpperCase()));
+      }
+      if (found) {
+        validCodesToAdd.push(found.reelNo);
+      }
+    });
+    if (validCodesToAdd.length > 0) {
+      setSelectedReelNos(prev => Array.from(new Set([...prev, ...validCodesToAdd])));
+      playBeep();
+      setBarcodeGunInput('');
+      setSuccessMsg(`Added ${validCodesToAdd.length} reel(s): ${validCodesToAdd.join(', ')}`);
+    } else {
+      setErrorMsg(`Reel '${raw}' not found in active warehouse stock.`);
+    }
+  };
+
+  // Warehouse Stock Grand Totals
+  const stockGrandTotals = useMemo(() => {
+    const totalReels = availableReels.length;
+    const totalWeight = availableReels.reduce((sum, r) => sum + (r.weight || 0), 0);
+    const uniqueProductsCount = new Set(
+      availableReels.map(r => ((r.product && r.product.trim()) ? r.product.trim() : 'Standard Grade Paper'))
+    ).size;
+    const selectedCount = selectedReelNos.length;
+    const selectedWeight = availableReels
+      .filter(r => selectedReelNos.includes(r.reelNo))
+      .reduce((sum, r) => sum + (r.weight || 0), 0);
+
+    return {
+      totalReels,
+      totalWeight,
+      uniqueProductsCount,
+      selectedCount,
+      selectedWeight,
+    };
+  }, [availableReels, selectedReelNos]);
+
+  // Product-wise Warehouse Stock Summary (Product -> GSM & Size specification list with reel count & weight)
+  const productStockSummary = useMemo(() => {
+    const q = summarySearchQuery.toLowerCase().trim();
+
+    // Group available reels by product
+    const productMap = new Map<string, Reel[]>();
+
+    availableReels.forEach(r => {
+      // Check query match if user typed in search
+      if (q) {
+        const prod = (r.product || '').toLowerCase();
+        const reelNo = (r.reelNo || '').toLowerCase();
+        const gsm = String(r.gsm || '');
+        const size = String(r.size || '');
+        const weight = String(r.weight || '');
+        const grade = (r.qcGrade || '').toLowerCase();
+        if (
+          !prod.includes(q) &&
+          !reelNo.includes(q) &&
+          !gsm.includes(q) &&
+          !size.includes(q) &&
+          !weight.includes(q) &&
+          !grade.includes(q)
+        ) {
+          return;
+        }
+      }
+
+      const prodName = (r.product && r.product.trim()) ? r.product.trim() : 'Standard Grade Paper';
+      if (!productMap.has(prodName)) {
+        productMap.set(prodName, []);
+      }
+      productMap.get(prodName)!.push(r);
+    });
+
+    const result = Array.from(productMap.entries()).map(([productName, prodReels]) => {
+      // Group by specification (GSM + Size + Ply) within product
+      const specMap = new Map<string, Reel[]>();
+      prodReels.forEach(r => {
+        const specKey = `${r.gsm || 0}__${r.size || 0}__${r.ply || 1}`;
+        if (!specMap.has(specKey)) {
+          specMap.set(specKey, []);
+        }
+        specMap.get(specKey)!.push(r);
+      });
+
+      const specs = Array.from(specMap.entries())
+        .map(([specKey, sReels]) => {
+          const first = sReels[0];
+          const gsm = first.gsm || 0;
+          const size = first.size || 0;
+          const ply = first.ply || 1;
+          const reelCount = sReels.length;
+          const totalWeight = sReels.reduce((sum, r) => sum + (r.weight || 0), 0);
+          const avgWeight = reelCount > 0 ? Math.round(totalWeight / reelCount) : 0;
+          const selectedReelsCount = sReels.filter(r => selectedReelNos.includes(r.reelNo)).length;
+          const selectedWeight = sReels
+            .filter(r => selectedReelNos.includes(r.reelNo))
+            .reduce((sum, r) => sum + (r.weight || 0), 0);
+
+          return {
+            key: specKey,
+            gsm,
+            size,
+            ply,
+            reelCount,
+            totalWeight,
+            avgWeight,
+            reels: sReels,
+            selectedReelsCount,
+            selectedWeight,
+          };
+        })
+        .sort((a, b) => {
+          if (a.gsm !== b.gsm) return a.gsm - b.gsm;
+          return a.size - b.size;
+        });
+
+      const totalReels = prodReels.length;
+      const totalWeight = prodReels.reduce((sum, r) => sum + (r.weight || 0), 0);
+      const selectedReelsCount = prodReels.filter(r => selectedReelNos.includes(r.reelNo)).length;
+      const selectedWeight = prodReels
+        .filter(r => selectedReelNos.includes(r.reelNo))
+        .reduce((sum, r) => sum + (r.weight || 0), 0);
+
+      return {
+        product: productName,
+        reels: prodReels,
+        totalReels,
+        totalWeight,
+        selectedReelsCount,
+        selectedWeight,
+        specs,
+      };
+    });
+
+    return result.sort((a, b) => a.product.localeCompare(b.product));
+  }, [availableReels, summarySearchQuery, selectedReelNos]);
+
+  // Toggle selection for an entire product
+  const handleToggleProductSelection = (prodReels: Reel[]) => {
+    const nos = prodReels.map(r => r.reelNo);
+    const allSelected = nos.length > 0 && nos.every(no => selectedReelNos.includes(no));
+    if (allSelected) {
+      setSelectedReelNos(prev => prev.filter(no => !nos.includes(no)));
+    } else {
+      setSelectedReelNos(prev => Array.from(new Set([...prev, ...nos])));
+    }
+    playBeep();
+  };
+
+  // Toggle selection for a specific specification (GSM + Size) within a product
+  const handleToggleSpecSelection = (specReels: Reel[]) => {
+    const nos = specReels.map(r => r.reelNo);
+    const allSelected = nos.length > 0 && nos.every(no => selectedReelNos.includes(no));
+    if (allSelected) {
+      setSelectedReelNos(prev => prev.filter(no => !nos.includes(no)));
+    } else {
+      setSelectedReelNos(prev => Array.from(new Set([...prev, ...nos])));
+    }
+    playBeep();
+  };
+
+  // Toggle selection for a single reel
+  const handleToggleSingleReel = (reelNo: string) => {
+    setSelectedReelNos(prev =>
+      prev.includes(reelNo) ? prev.filter(no => no !== reelNo) : [...prev, reelNo]
+    );
+    playBeep();
+  };
+
+  // Expand / collapse product accordion
+  const toggleProductExpand = (productName: string) => {
+    setExpandedProducts(prev => ({
+      ...prev,
+      [productName]: prev[productName] === false ? true : false,
+    }));
+  };
+
+  // Expand / collapse spec reel details
+  const toggleSpecExpand = (key: string) => {
+    setExpandedSpecs(prev => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
+
+
+
+  // Add a new product line to order booking
+  const handleAddOrderProductLine = () => {
+    setOrderProductLines(prev => [
+      ...prev,
+      {
+        id: `item-${prev.length}-${Date.now()}`,
+        productId: '',
+        gsm: '16',
+        size: '30',
+        ply: '2',
+        weightTons: '25000',
+        qty: '20',
+      },
+    ]);
+  };
+
+  // Remove a product line from order booking
+  const handleRemoveOrderProductLine = (id: string) => {
+    if (orderProductLines.length <= 1) {
+      setOrderProductLines([
+        {
+          id: `item-0-${Date.now()}`,
+          productId: '',
+          gsm: '16',
+          size: '30',
+          ply: '2',
+          weightTons: '25000',
+          qty: '20',
+        },
+      ]);
+      return;
+    }
+    setOrderProductLines(prev => prev.filter(p => p.id !== id));
+  };
+
+  // Update a specific product line
+  const handleUpdateOrderProductLine = (id: string, updates: Partial<OrderProductLine>) => {
+    setOrderProductLines(prev =>
+      prev.map(item => {
+        if (item.id !== id) return item;
+        const updated = { ...item, ...updates };
+        if (updates.productId && updates.productId !== item.productId) {
+          const prod = products.find(p => p.id === updates.productId);
+          if (prod) {
+            updated.gsm = String(prod.gsm || 16);
+            const s = prod.size || 30;
+            updated.size = String(s > 100 ? Math.round(s / 100) : s);
+            updated.ply = String(prod.ply || 2);
+          }
+        }
+        return updated;
+      })
+    );
+  };
+
+  // Handle Order submit
+  const handleOrderSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setSuccessMsg('');
+    setErrorMsg('');
+
+    if (isViewer) {
+      setErrorMsg('Viewer Mode: Booking customer orders is locked. You have read-only access.');
+      return;
+    }
+
+    if (!selectedPartyId) {
+      setErrorMsg('Please select Customer Party');
+      return;
+    }
+
+    if (!orderReceiveDate) {
+      setErrorMsg('Please select an Order Receive Date');
+      return;
+    }
+
+    const validLines = orderProductLines.filter(line => line.productId.trim() !== '');
+    if (validLines.length === 0) {
+      setErrorMsg('Please select at least one valid Product for the order');
+      return;
+    }
+
+    const baseTime = Date.now();
+    const savedOrdersList: PendingOrder[] = [];
+    const targetOrderNo = orderNo.trim() || defaultOrderNo;
+
+    for (let i = 0; i < validLines.length; i++) {
+      const line = validLines[i];
+      const prod = products.find(p => p.id === line.productId);
+      if (!prod) continue;
+
+      const rawWeightKg = parseFloat(line.weightTons) || 25000;
+      const qty = parseInt(line.qty) || Math.round(rawWeightKg / 1200) || 1;
+      const weightTons = parseFloat((rawWeightKg / 1000).toFixed(2));
+
+      const newOrder: PendingOrder = {
+        id: `or-${baseTime}-${i}`,
+        orderNo: targetOrderNo,
+        partyId: selectedPartyId,
+        productId: line.productId,
+        gsm: parseFloat(line.gsm) || prod.gsm || 18,
+        size: parseFloat(line.size) || prod.size || 30,
+        ply: parseInt(line.ply) || prod.ply || 2,
+        qty,
+        weightTons,
+        receiveDate: orderReceiveDate,
+        dueDate: orderReceiveDate,
+        status: 'PENDING',
+        dispatchedQty: 0,
+      };
+
+      savePendingOrder(newOrder, user?.displayName || 'System');
+      savedOrdersList.push(newOrder);
+    }
+
+    setOrders(getPendingOrders());
+    setSuccessMsg(`Customer Order Booking [${targetOrderNo}] with ${savedOrdersList.length} product(s) successfully registered!`);
+    setSelectedPartyId('');
+    setOrderNo('');
+    setOrderProductLines([
+      {
+        id: `item-0-${Date.now()}`,
+        productId: '',
+        gsm: '16',
+        size: '30',
+        ply: '2',
+        weightTons: '25000',
+        qty: '20',
+      },
+    ]);
+  };
+
+  // Toggle reel selection
+  const handleToggleReel = (rNo: string) => {
+    setSelectedReelNos(prev => {
+      const exists = prev.includes(rNo);
+      playBeep();
+      return exists ? prev.filter(n => n !== rNo) : [...prev, rNo];
+    });
+  };
+
+  // Handle Draft Packing Slip creation
+  const handleSlipSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setSuccessMsg('');
+    setErrorMsg('');
+
+    if (isViewer) {
+      setErrorMsg('Viewer Mode: Creating packing slips is locked. You have read-only access.');
+      return;
+    }
+
+    const targetSlipNo = autoSlipNo;
+
+    if (!slipPartyId || !slipVehicleId.trim() || selectedReelNos.length === 0) {
+      setErrorMsg('Please select Customer Party, enter Vehicle / Truck No, and select at least 1 Reel.');
+      return;
+    }
+
+    if (slips.some(s => s.slipNo.toUpperCase() === targetSlipNo.toUpperCase())) {
+      setErrorMsg(`Challan number ${targetSlipNo} has already been logged.`);
+      return;
+    }
+
+    const newSlip: PackingSlip = {
+      id: `slip-${Date.now()}`,
+      slipNo: targetSlipNo,
+      orderNo: slipOrderNo.trim() || undefined,
+      date: slipDate,
+      partyId: slipPartyId,
+      vehicleId: slipVehicleId.trim(),
+      reelNos: [...selectedReelNos],
+      driverSignature: 'Gate Verified',
+      receiverSignature: receiverSig.trim() || 'Gate Verified',
+      status: 'DISPATCHED',
+    };
+
+    savePackingSlip(newSlip, user?.displayName || 'System');
+    setSlips(getPackingSlips());
+    setReels(getReels());
+    setOrders(getPendingOrders());
+    setSuccessMsg(`Delivery Challan #${targetSlipNo} issued successfully! ${selectedReelNos.length} reels dispatched and deducted from warehouse stock.`);
+    
+    // Reset Form
+    setSlipNo('');
+    setSlipOrderNo('');
+    setSlipPartyId('');
+    setSlipVehicleId('');
+    setSelectedReelNos([]);
+    setReceiverSig('');
+    handleTabChange('slips_list');
+  };
+
+  // Handle Open Edit Challan
+  const handleOpenEditSlip = (slip: PackingSlip) => {
+    setEditingSlip(slip);
+    setEditOrderNo(slip.orderNo || '');
+    setEditDate(slip.date);
+    setEditPartyId(slip.partyId);
+    setEditVehicleId(slip.vehicleId);
+    setEditReelNos([...slip.reelNos]);
+    setEditReelInput('');
+    setEditModalError('');
+  };
+
+  // Handle Remove Reel from Edit
+  const handleRemoveReelFromEdit = (rNo: string) => {
+    setEditReelNos(prev => prev.filter(no => no !== rNo));
+  };
+
+  // Handle Add Reel to Edit
+  const handleAddReelToEdit = (rNo: string) => {
+    const cleanNo = rNo.trim();
+    if (!cleanNo) return;
+    if (!editReelNos.includes(cleanNo)) {
+      setEditReelNos(prev => [...prev, cleanNo]);
+      setEditReelInput('');
+    }
+  };
+
+  // Handle Save Edit Slip
+  const handleSaveEditSlip = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSlip) return;
+    setEditModalError('');
+
+    if (!editPartyId) {
+      setEditModalError('Please select a Customer / Party.');
+      return;
+    }
+    if (!editVehicleId.trim()) {
+      setEditModalError('Please specify a Vehicle Number.');
+      return;
+    }
+    if (editReelNos.length === 0) {
+      setEditModalError('Delivery Challan must have at least 1 linked reel.');
+      return;
+    }
+
+    const updatedSlip: PackingSlip = {
+      ...editingSlip,
+      orderNo: editOrderNo.trim() || undefined,
+      date: editDate,
+      partyId: editPartyId,
+      vehicleId: editVehicleId,
+      reelNos: editReelNos,
+    };
+
+    savePackingSlip(updatedSlip, user?.displayName || 'System');
+    setSlips(getPackingSlips());
+    setReels(getReels());
+    setOrders(getPendingOrders());
+    setEditingSlip(null);
+    setSuccessMsg(`Delivery Challan #${updatedSlip.slipNo} updated successfully!`);
+    setTimeout(() => setSuccessMsg(''), 4000);
+  };
+
+  // Stock Reels Picker Handlers for Edit Modal
+  const handleOpenEditStockPicker = () => {
+    setEditPickerSearch(editReelInput.trim());
+    setEditPickerBarcodeInput('');
+    setEditPickerSelectedNos([]);
+    setEditPickerProductFilter('ALL');
+    setEditPickerGsmFilter('ALL');
+    setEditPickerSizeFilter('ALL');
+    setEditPickerPlyFilter('ALL');
+    setEditPickerGradeFilter('ALL');
+    setIsEditStockPickerOpen(true);
+  };
+
+  const handleTogglePickerReel = (rNo: string) => {
+    setEditPickerSelectedNos(prev => {
+      const exists = prev.includes(rNo);
+      playBeep();
+      return exists ? prev.filter(n => n !== rNo) : [...prev, rNo];
+    });
+  };
+
+  const handleSelectAllPickerReels = (reelsList: Reel[]) => {
+    const allNos = reelsList.map(r => r.reelNo);
+    setEditPickerSelectedNos(prev => Array.from(new Set([...prev, ...allNos])));
+    playBeep();
+  };
+
+  const handleSelectPickerTopN = (n: number, reelsList: Reel[]) => {
+    const topNos = reelsList.slice(0, n).map(r => r.reelNo);
+    setEditPickerSelectedNos(prev => Array.from(new Set([...prev, ...topNos])));
+    playBeep();
+  };
+
+  const handleDeselectAllPickerReels = () => {
+    setEditPickerSelectedNos([]);
+    playBeep();
+  };
+
+  const handlePickerBarcodeSubmit = (e?: React.FormEvent, directReelNo?: string) => {
+    if (e) e.preventDefault();
+    const query = (directReelNo !== undefined ? directReelNo : (editPickerBarcodeInput || editPickerSearch)).trim().toLowerCase();
+    if (!query) return;
+
+    const matched = availableReelsForEdit.find(r => r.reelNo.toLowerCase() === query) ||
+                    availableReelsForEdit.find(r => r.reelNo.toLowerCase().includes(query));
+    if (matched) {
+      if (!editPickerSelectedNos.includes(matched.reelNo)) {
+        setEditPickerSelectedNos(prev => [...prev, matched.reelNo]);
+        playBeep();
+      }
+      setEditPickerBarcodeInput('');
+    }
+  };
+
+  const handleConfirmAddFromStockPicker = () => {
+    if (editPickerSelectedNos.length > 0) {
+      setEditReelNos(prev => Array.from(new Set([...prev, ...editPickerSelectedNos])));
+      setEditReelInput('');
+    }
+    setIsEditStockPickerOpen(false);
+  };
+
+  // Filter available reels in stock for Edit Challan picker
+  const availableReelsForEdit = useMemo(() => {
+    return reels.filter(r => {
+      const isNotDispatched = r.status !== 'DISPATCHED' && r.status !== 'DELIVERED';
+      const isNotAlreadyInChallan = !editReelNos.includes(r.reelNo);
+      return isNotDispatched && isNotAlreadyInChallan;
+    });
+  }, [reels, editReelNos]);
+
+  // Unique products for edit picker
+  const editPickerUniqueProducts = useMemo(() => {
+    const set = new Set<string>();
+    availableReelsForEdit.forEach(r => {
+      if (r.product) set.add(r.product);
+    });
+    return Array.from(set).sort();
+  }, [availableReelsForEdit]);
+
+  // Unique GSMs for edit picker
+  const editPickerUniqueGsms = useMemo(() => {
+    const set = new Set<number>();
+    availableReelsForEdit.forEach(r => {
+      if (editPickerProductFilter === 'ALL' || r.product === editPickerProductFilter) {
+        if (r.gsm) set.add(r.gsm);
+      }
+    });
+    return Array.from(set).sort((a, b) => a - b);
+  }, [availableReelsForEdit, editPickerProductFilter]);
+
+  // Unique Sizes for edit picker
+  const editPickerUniqueSizes = useMemo(() => {
+    const set = new Set<number>();
+    availableReelsForEdit.forEach(r => {
+      const matchProd = editPickerProductFilter === 'ALL' || r.product === editPickerProductFilter;
+      const matchGsm = editPickerGsmFilter === 'ALL' || r.gsm === editPickerGsmFilter;
+      if (matchProd && matchGsm && r.size) {
+        set.add(r.size);
+      }
+    });
+    return Array.from(set).sort((a, b) => a - b);
+  }, [availableReelsForEdit, editPickerProductFilter, editPickerGsmFilter]);
+
+  // Unique Plys for edit picker
+  const editPickerUniquePlys = useMemo(() => {
+    const set = new Set<number>();
+    availableReelsForEdit.forEach(r => {
+      const matchProd = editPickerProductFilter === 'ALL' || r.product === editPickerProductFilter;
+      const matchGsm = editPickerGsmFilter === 'ALL' || r.gsm === editPickerGsmFilter;
+      const matchSize = editPickerSizeFilter === 'ALL' || r.size === editPickerSizeFilter;
+      if (matchProd && matchGsm && matchSize && r.ply) {
+        set.add(r.ply);
+      }
+    });
+    return Array.from(set).sort((a, b) => a - b);
+  }, [availableReelsForEdit, editPickerProductFilter, editPickerGsmFilter, editPickerSizeFilter]);
+
+  const filteredAvailableReelsForEdit = useMemo(() => {
+    const q = editPickerSearch.toLowerCase().trim();
+    return availableReelsForEdit.filter(r => {
+      if (editPickerProductFilter !== 'ALL' && r.product !== editPickerProductFilter) return false;
+      if (editPickerGsmFilter !== 'ALL' && r.gsm !== editPickerGsmFilter) return false;
+      if (editPickerSizeFilter !== 'ALL' && r.size !== editPickerSizeFilter) return false;
+      if (editPickerPlyFilter !== 'ALL' && r.ply !== editPickerPlyFilter) return false;
+      if (editPickerGradeFilter !== 'ALL') {
+        const grade = (r.qcGrade || 'A').toUpperCase();
+        if (grade !== editPickerGradeFilter) return false;
+      }
+      if (q) {
+        const matchNo = r.reelNo.toLowerCase().includes(q);
+        const matchProd = r.product.toLowerCase().includes(q);
+        const matchGsm = String(r.gsm).includes(q);
+        const matchSize = String(r.size).includes(q);
+        const matchWeight = String(r.weight).includes(q);
+        if (!matchNo && !matchProd && !matchGsm && !matchSize && !matchWeight) return false;
+      }
+      return true;
+    });
+  }, [availableReelsForEdit, editPickerSearch, editPickerProductFilter, editPickerGsmFilter, editPickerSizeFilter, editPickerPlyFilter, editPickerGradeFilter]);
+
+  // Handle Confirm Dispatch trigger (atomic decrement & status updates)
+  const handleConfirmDispatch = (slipId: string) => {
+    setSuccessMsg('');
+    setErrorMsg('');
+
+    if (isViewer) {
+      setErrorMsg('Viewer Mode: Confirming dispatch is locked. You have read-only access.');
+      return;
+    }
+
+    try {
+      confirmDispatch(slipId, user?.displayName || 'System');
+      // Refresh local lists
+      setSlips(getPackingSlips());
+      setReels(getReels());
+      setOrders(getPendingOrders());
+      setSuccessMsg('Dispatch finalized successfully! Finished stock counts decremented and transaction audit log written.');
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Error finalizing dispatch');
+    }
+  };
+
+  // Handle Delete Challan
+  const handleDeleteSlip = (slip: PackingSlip) => {
+    if (isViewer) {
+      setErrorMsg('Viewer Mode: Deleting challans is locked.');
+      return;
+    }
+    if (window.confirm(`Are you sure you want to delete Delivery Challan #${slip.slipNo}? Any reels linked to this challan will be restored to warehouse finished stock.`)) {
+      deletePackingSlip(slip.id, user?.displayName || 'Admin');
+      setSlips(getPackingSlips());
+      setReels(getReels());
+      setOrders(getPendingOrders());
+      playBeep();
+      setSuccessMsg(`Delivery Challan #${slip.slipNo} deleted successfully. Linked reels restored to finished stock.`);
+    }
+  };
+
+  // Handle Clear All Challans
+  const handleClearAllSlips = () => {
+    if (isViewer) {
+      setErrorMsg('Viewer Mode: Clearing challans is locked.');
+      return;
+    }
+    if (window.confirm(`Are you sure you want to delete ALL ${slips.length} delivery challans and reset dispatch records to zero? Linked reels will be restored to warehouse inventory.`)) {
+      clearAllPackingSlips(user?.displayName || 'Admin');
+      setSlips([]);
+      setReels(getReels());
+      setOrders(getPendingOrders());
+      playBeep();
+      setSuccessMsg('All registered delivery challans cleared successfully. Dispatch records reset to 0.');
+    }
+  };
+
+  // --- SHEETJS EXPORTS ---
+  const handleExportExcel = (slip: PackingSlip) => {
+    if (isViewer) {
+      setErrorMsg('Viewer Mode: Exporting Excel challans is locked. You have read-only access.');
+      return;
+    }
+    const partyObj = parties.find(p => p.id === slip.partyId || p.name.toLowerCase() === slip.partyId?.toLowerCase());
+    const vehicleObj = vehicles.find(v => v.id === slip.vehicleId || v.vehicleNo === slip.vehicleId);
+    const vehicleDisplay = vehicleObj ? vehicleObj.vehicleNo : (slip.vehicleId || 'N/A');
+    
+    let linkedReels = reels.filter(r => (slip.reelNos || []).includes(r.reelNo));
+    if (linkedReels.length === 0) {
+      linkedReels = reels.filter(r => r.dispatchDetails?.packingSlipNo === slip.slipNo || r.challanNo === slip.slipNo);
+    }
+
+    const totalWeight = linkedReels.reduce((sum, r) => sum + (r.weight || 0), 0);
+
+    const worksheet = createStyledWorksheet({
+      title: 'DELIVERY CHALLAN',
+      metadata: [
+        {
+          leftLabel: 'Challan No.',
+          leftValue: slip.slipNo,
+          rightLabel: 'Date',
+          rightValue: slip.date,
+        },
+        {
+          leftLabel: 'Customer',
+          leftValue: partyObj?.name || slip.partyId || 'Direct Customer',
+          rightLabel: 'Vehicle No.',
+          rightValue: vehicleDisplay,
+        },
+      ],
+      headers: ['Reel Number', 'Product Description', 'GSM', 'Size (cm)', 'Ply', 'Weight (kg)'],
+      rows: linkedReels.map(r => [
+        r.reelNo,
+        r.product || 'Tissue Paper',
+        r.gsm,
+        r.size,
+        r.ply || 1,
+        r.weight || 0,
+      ]),
+      alignments: ['center', 'left', 'center', 'center', 'center', 'center'],
+      colWidths: [22, 28, 12, 14, 10, 18],
+      totals: {
+        label: 'TOTAL WEIGHT',
+        value: `${totalWeight.toLocaleString()} kg`,
+      },
+      footerNote: 'This is a system-generated delivery challan and does not require a physical stamp unless otherwise specified.',
+    });
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Delivery Challan');
+    exportExcelWorkbook(workbook, `Delivery_Challan_${slip.slipNo}.xlsx`);
+  };
+
+  const handlePrintSlip = (slip: PackingSlip) => {
+    if (isViewer) return;
+    setDirectPrintSlip(slip);
+    setIsPrintingReceipt(true);
+    document.body.classList.add('printing-challan');
+
+    const targetSlipNo = slip?.slipNo || 'Document';
+    setSuccessMsg(`📄 Delivery_Challan_${targetSlipNo}.pdf ready for printing!`);
+    setTimeout(() => setSuccessMsg(''), 4500);
+
+    if (typeof window !== 'undefined' && (window as any).AndroidNativeBridge?.printDocument) {
+      try {
+        (window as any).AndroidNativeBridge.printDocument(`Challan_${targetSlipNo}`);
+      } catch (e) {
+        console.warn('[DispatchPrint] AndroidNativeBridge failed:', e);
+      }
+    }
+
+    let cleanedUp = false;
+    const cleanup = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      document.body.classList.remove('printing-challan');
+      setDirectPrintSlip(null);
+      setIsPrintingReceipt(false);
+      window.removeEventListener('afterprint', cleanup);
+    };
+    window.addEventListener('afterprint', cleanup);
+
+    setTimeout(() => {
+      window.print();
+      setTimeout(cleanup, 2000);
+    }, 150);
+  };
+
+  const handlePrintChallan = () => {
+    if (isViewer) return;
+    const slip = viewingSlip;
+    if (!slip) return;
+
+    setIsPrintingReceipt(true);
+    document.body.classList.add('printing-challan');
+
+    const targetSlipNo = slip.slipNo || 'Document';
+    setSuccessMsg(`📄 Delivery_Challan_${targetSlipNo}.pdf ready for printing!`);
+    setTimeout(() => setSuccessMsg(''), 4500);
+
+    if (typeof window !== 'undefined' && (window as any).AndroidNativeBridge?.printDocument) {
+      try {
+        (window as any).AndroidNativeBridge.printDocument(`Challan_${targetSlipNo}`);
+      } catch (e) {
+        console.warn('[DispatchPrint] AndroidNativeBridge failed:', e);
+      }
+    }
+
+    let cleanedUp = false;
+    const cleanup = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      document.body.classList.remove('printing-challan');
+      setIsPrintingReceipt(false);
+      window.removeEventListener('afterprint', cleanup);
+    };
+    window.addEventListener('afterprint', cleanup);
+
+    setTimeout(() => {
+      window.print();
+      setTimeout(cleanup, 2000);
+    }, 150);
+  };
+
+  return (
+    <div className="space-y-3 sm:space-y-6">
+
+      {/* Enhanced Accessible Segmented Tab Bar */}
+      {!hideTabs && (
+        <div className="bg-white dark:bg-slate-900/90 p-1.5 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-sm w-full">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-1.5 w-full">
+            {initialTab === 'orders' ? (
+              <button
+                type="button"
+                onClick={() => { setActiveTab('orders'); setSuccessMsg(''); setErrorMsg(''); }}
+                className="col-span-1 md:col-span-3 w-full flex items-center justify-center gap-2.5 py-3 px-4 rounded-xl text-xs sm:text-sm font-black transition-all cursor-pointer bg-primary text-white shadow-xs"
+              >
+                <FileText className="h-4.5 w-4.5" />
+                <span>Customer Order Bookings</span>
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleTabChange('create_slip')}
+                  className={`w-full flex items-center justify-center gap-2 py-2.5 sm:py-3 px-3 sm:px-4 rounded-xl text-xs sm:text-sm font-bold transition-all duration-150 cursor-pointer ${
+                    activeTab === 'create_slip'
+                      ? 'bg-primary text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  <Plus className="h-4 w-4 shrink-0" />
+                  <span className="truncate">Draft Packing Slip</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleTabChange('slips_list')}
+                  className={`w-full flex items-center justify-center gap-2 py-2.5 sm:py-3 px-3 sm:px-4 rounded-xl text-xs sm:text-sm font-bold transition-all duration-150 cursor-pointer ${
+                    activeTab === 'slips_list'
+                      ? 'bg-primary text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  <Truck className="h-4 w-4 shrink-0" />
+                  <span className="truncate">Packing Slips &amp; Challans</span>
+                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold shrink-0 ${
+                    activeTab === 'slips_list' 
+                      ? 'bg-white/20 text-white border border-white/30' 
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200/80 dark:border-slate-700/80'
+                  }`}>
+                    {slips.length}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleTabChange('dispatched_vault')}
+                  className={`w-full flex items-center justify-center gap-2 py-2.5 sm:py-3 px-3 sm:px-4 rounded-xl text-xs sm:text-sm font-bold transition-all duration-150 cursor-pointer ${
+                    activeTab === 'dispatched_vault'
+                      ? 'bg-primary text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  <PackageCheck className="h-4 w-4 shrink-0" />
+                  <span className="truncate">Dispatched Reels</span>
+                  <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold shrink-0 ${
+                    activeTab === 'dispatched_vault' 
+                      ? 'bg-white/20 text-white border border-white/30' 
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200/80 dark:border-slate-700/80'
+                  }`}>
+                    {reels.filter(r => r.status === 'DISPATCHED' || r.challanNo).length}
+                  </span>
+                </button>
+
+                {/* Mobile-Only QR Scanner Tab */}
+                <button
+                  type="button"
+                  onClick={() => handleTabChange('qr_scanner')}
+                  className={`md:hidden w-full flex items-center justify-center gap-2 py-2.5 sm:py-3 px-3 sm:px-4 rounded-xl text-xs sm:text-sm font-bold transition-all duration-150 cursor-pointer ${
+                    activeTab === 'qr_scanner'
+                      ? 'bg-primary text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/80 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  <QrCode className="h-4 w-4 shrink-0" />
+                  <span className="truncate">QR Scanner</span>
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {successMsg && (
+        <div className="p-3.5 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-600 dark:text-emerald-400 text-xs rounded-2xl border border-emerald-200 dark:border-emerald-800 font-bold">
+          {successMsg}
+        </div>
+      )}
+      {errorMsg && (
+        <div className="p-3.5 bg-red-50 dark:bg-red-950/20 text-red-600 dark:text-red-400 text-xs rounded-2xl border border-red-200 dark:border-red-800 font-bold">
+          {errorMsg}
+        </div>
+      )}
+
+      {/* 1. TAB: Pending Customer Orders */}
+      {activeTab === 'orders' && (() => {
+        const timeframeOrders = orders.filter(o => isDateInTimeframe(o.receiveDate || o.dueDate || '', selectedDate, timeframe));
+        const timeframeLabel = timeframe === 'day' ? `For Day (${selectedDate})` : timeframe === 'week' ? 'Weekly Window' : timeframe === 'month' ? `Month (${selectedDate.substring(0, 7)})` : 'All-Time';
+        const pendingCount = timeframeOrders.filter(o => o.status !== 'COMPLETED').length;
+        const totalReelsOrdered = timeframeOrders.reduce((sum, o) => sum + (o.qty || 0), 0);
+        const totalTonsOrdered = timeframeOrders.reduce((sum, o) => sum + (o.weightTons || 0), 0);
+
+        return (
+          <div className="space-y-4">
+            {/* Top KPI Metrics Row for Orders */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-left">
+              <div className="bg-white dark:bg-surface-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 shadow-2xs">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Total Orders</span>
+                <span className="text-xl font-black text-slate-900 dark:text-white font-mono">{timeframeOrders.length}</span>
+                <span className="text-[10px] text-slate-500 block mt-0.5 truncate">{timeframeLabel}</span>
+              </div>
+
+              <div className="bg-white dark:bg-surface-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 shadow-2xs">
+                <span className="text-[10px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400 block">Pending Fulfillment</span>
+                <span className="text-xl font-black text-amber-600 dark:text-amber-400 font-mono">
+                  {pendingCount}
+                </span>
+                <span className="text-[10px] text-slate-500 block mt-0.5">Awaiting Dispatch</span>
+              </div>
+
+              <div className="bg-white dark:bg-surface-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 shadow-2xs">
+                <span className="text-[10px] font-black uppercase tracking-wider text-blue-600 dark:text-blue-400 block">Ordered Units</span>
+                <span className="text-xl font-black text-blue-600 dark:text-blue-400 font-mono">
+                  {totalReelsOrdered}
+                </span>
+                <span className="text-[10px] text-slate-500 block mt-0.5">Reels Booked</span>
+              </div>
+
+              <div className="bg-white dark:bg-surface-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 shadow-2xs">
+                <span className="text-[10px] font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400 block">Total Volume</span>
+                <span className="text-xl font-black text-emerald-600 dark:text-emerald-400 font-mono">
+                  {totalTonsOrdered > 0 ? `${Math.round(totalTonsOrdered * 1000).toLocaleString('en-IN')} kg` : `${totalReelsOrdered} Reels`}
+                </span>
+                <span className="text-[10px] text-slate-500 block mt-0.5">Booked Weight</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+          {/* List Section */}
+          <div className="lg:col-span-2 bg-white dark:bg-surface-dark rounded-3xl p-6 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4 border-b border-slate-100 dark:border-slate-800 pb-3">
+              <h3 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
+                <FileText className="h-4 w-4 text-primary" />
+                Active Orders Ledger
+              </h3>
+              <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-[11px] font-bold">
+                <button
+                  type="button"
+                  onClick={() => setOrderStatusFilter('ACTIVE')}
+                  className={`px-3 py-1 rounded-lg transition cursor-pointer ${
+                    orderStatusFilter === 'ACTIVE'
+                      ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-300 shadow-2xs font-black'
+                      : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                  }`}
+                >
+                  Active ({orders.filter(o => o.status !== 'COMPLETED').length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOrderStatusFilter('COMPLETED')}
+                  className={`px-3 py-1 rounded-lg transition cursor-pointer ${
+                    orderStatusFilter === 'COMPLETED'
+                      ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-300 shadow-2xs font-black'
+                      : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                  }`}
+                >
+                  Dispatched ({orders.filter(o => o.status === 'COMPLETED').length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOrderStatusFilter('ALL')}
+                  className={`px-3 py-1 rounded-lg transition cursor-pointer ${
+                    orderStatusFilter === 'ALL'
+                      ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-300 shadow-2xs font-black'
+                      : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                  }`}
+                >
+                  All ({orders.length})
+                </button>
+              </div>
+            </div>
+
+            {/* Search bar */}
+            <div className="bg-slate-50 dark:bg-slate-900 rounded-2xl p-3 flex items-center gap-3">
+              <Search className="h-4 w-4 text-slate-400 shrink-0" />
+              <input
+                type="text"
+                value={orderSearchQuery}
+                onChange={e => setOrderSearchQuery(e.target.value)}
+                placeholder="Search orders by Order No, customer or product..."
+                className="bg-transparent border-none text-xs font-semibold focus:outline-none w-full dark:text-white placeholder-slate-400"
+              />
+              <div className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500 shrink-0">
+                <ListFilter className="h-4 w-4" />
+              </div>
+            </div>
+
+            {filteredOrders.length === 0 ? (
+              <p className="text-xs text-slate-500 dark:text-slate-400 py-6 text-center font-medium">No orders match your search criteria.</p>
+            ) : (
+              <div className="space-y-4">
+                {/* Desktop/Tablet Table */}
+                <div className="hidden md:block overflow-x-auto rounded-2xl border border-slate-100 dark:border-slate-800">
+                  <table className="w-full text-left border-collapse min-w-[700px]">
+                    <thead>
+                      <tr className="bg-slate-50 dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 text-slate-400 uppercase text-[10px] font-black tracking-wider">
+                        <th className="py-3.5 px-4 whitespace-nowrap">Order No</th>
+                        <th className="py-3.5 px-4 whitespace-nowrap">Customer</th>
+                        <th className="py-3.5 px-4 whitespace-nowrap">Product</th>
+                        <th className="py-3.5 px-4 whitespace-nowrap">Ordered</th>
+                        <th className="py-3.5 px-4 whitespace-nowrap">Dispatched</th>
+                        <th className="py-3.5 px-4 whitespace-nowrap">Stock Status</th>
+                        <th className="py-3.5 px-4 whitespace-nowrap">Due Date</th>
+                        <th className="py-3.5 px-4 text-right whitespace-nowrap">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {filteredOrders.map(order => {
+                        const partyObj = parties.find(p => p.id === order.partyId);
+                        const prodObj = products.find(p => p.id === order.productId);
+                        const pendingReels = Math.max(0, order.qty - order.dispatchedQty);
+                        const inStockMatching = reels.filter(
+                          r => (r.status === 'IN_STOCK' || r.status === 'IN_STOCK_B' || r.status === 'QC_PASSED') &&
+                               !r.challanNo &&
+                               r.gsm === order.gsm &&
+                               r.size === order.size &&
+                               r.ply === order.ply
+                        );
+                        const hasEnoughStock = inStockMatching.length >= pendingReels;
+
+                        const orderCleanNo = (order.orderNo || order.id || '').trim().toUpperCase();
+                        const orderSlips = slips.filter(s =>
+                          (s.status === 'DISPATCHED' || s.status === 'CONFIRMED') &&
+                          (s.orderNo || '').trim().toUpperCase() === orderCleanNo
+                        );
+                        const orderReelNos = new Set(orderSlips.flatMap(s => s.reelNos || []));
+                        const directDispatchedKg = reels
+                          .filter(r => orderReelNos.has(r.reelNo))
+                          .reduce((sum, r) => sum + (r.weight || 0), 0);
+
+                        const totalWeightKg = order.weightTons ? Math.round(order.weightTons * 1000) : (order.qty * 1250);
+                        const dispatchedWeightKg = directDispatchedKg > 0
+                          ? directDispatchedKg
+                          : (order.qty > 0 && order.dispatchedQty > 0 ? Math.round((order.dispatchedQty / order.qty) * totalWeightKg) : 0);
+                        const remainingWeightKg = Math.max(0, totalWeightKg - dispatchedWeightKg);
+
+                        return (
+                          <tr key={order.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition group">
+                            {/* Order No */}
+                            <td className="py-4 px-4 whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSlipPartyId(order.partyId);
+                                  setSlipOrderNo(order.orderNo || '');
+                                  handleTabChange('create_slip');
+                                }}
+                                title="Create Delivery Challan for this Order"
+                                className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-black font-mono bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/60 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 border border-blue-200/80 dark:border-blue-800/80 shadow-2xs cursor-pointer transition"
+                              >
+                                {order.orderNo || '—'}
+                              </button>
+                            </td>
+
+                            {/* Customer */}
+                            <td className="py-4 px-4">
+                              <span className="text-sm font-bold text-slate-900 dark:text-white block leading-tight">
+                                {partyObj?.name || '—'}
+                              </span>
+                            </td>
+
+                            {/* Product */}
+                            <td className="py-4 px-4">
+                              <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block">
+                                {prodObj?.name || 'Tissue Paper'}
+                              </span>
+                              <span className="text-[11px] text-slate-400 font-mono mt-0.5 block">
+                                {order.gsm} GSM · {order.size > 100 ? `${Math.round(order.size / 100)} cm` : `${order.size} cm`} · {order.ply}P
+                              </span>
+                            </td>
+
+                            {/* Ordered / Remaining Weight */}
+                            <td className="py-4 px-4">
+                              <span className="text-sm font-bold text-slate-900 dark:text-white font-mono block">
+                                {order.status === 'PARTIAL'
+                                  ? `${remainingWeightKg.toLocaleString('en-IN')} kg`
+                                  : (order.weightTons ? `${totalWeightKg.toLocaleString('en-IN')} kg` : `${order.qty} reels`)}
+                              </span>
+                              {order.status === 'PARTIAL' ? (
+                                <span className="text-[10px] text-amber-600 dark:text-amber-400 font-bold block">
+                                  Remaining · Cut: {dispatchedWeightKg.toLocaleString('en-IN')} kg
+                                </span>
+                              ) : order.status === 'COMPLETED' ? (
+                                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold block">
+                                  Fulfilled
+                                </span>
+                              ) : null}
+                            </td>
+
+                            {/* Dispatched */}
+                            <td className="py-4 px-4">
+                              <span className={`text-sm font-bold font-mono block ${dispatchedWeightKg > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
+                                {dispatchedWeightKg > 0 ? `${dispatchedWeightKg.toLocaleString('en-IN')} kg` : '0 kg'}
+                              </span>
+                              {order.dispatchedQty > 0 && (
+                                <span className="text-[10px] text-slate-400 font-normal font-mono block">
+                                  ({order.dispatchedQty} reels)
+                                </span>
+                              )}
+                            </td>
+
+                            {/* Stock Status */}
+                            <td className="py-4 px-4">
+                              <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-bold whitespace-nowrap ${
+                                hasEnoughStock
+                                  ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                                  : 'bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
+                              }`}>
+                                <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${hasEnoughStock ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                                {hasEnoughStock
+                                  ? `Ready · ${inStockMatching.length} in stock`
+                                  : `${inStockMatching.length}/${pendingReels} stock`}
+                              </span>
+                            </td>
+
+                            {/* Due Date */}
+                            <td className="py-4 px-4">
+                              <span className="text-xs text-slate-500 dark:text-slate-400 font-mono">
+                                {order.receiveDate || order.dueDate || '—'}
+                              </span>
+                            </td>
+
+                            {/* Status Badge & Dispatch Action */}
+                            <td className="py-4 px-4 text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <span className={`inline-block px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                                  order.status === 'PENDING'
+                                    ? 'bg-violet-100 dark:bg-violet-950/40 text-violet-700 dark:text-violet-300 border border-violet-200 dark:border-violet-800'
+                                    : order.status === 'PARTIAL'
+                                    ? 'bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
+                                    : 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                                }`}>
+                                  {order.status}
+                                </span>
+                                {order.status !== 'COMPLETED' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStartChallanFromOrder(order)}
+                                    className="px-2.5 py-1 rounded-xl text-[10px] font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/50 hover:bg-blue-100 dark:hover:bg-blue-900/60 border border-blue-200 dark:border-blue-800/80 transition cursor-pointer flex items-center gap-1 shrink-0"
+                                    title="Create Delivery Challan for this order"
+                                  >
+                                    <Truck className="h-3 w-3" />
+                                    <span>Dispatch</span>
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Mobile Stacked Cards */}
+                <div className="block md:hidden space-y-3">
+                  {filteredOrders.map(order => {
+                    const partyObj = parties.find(p => p.id === order.partyId);
+                    const prodObj = products.find(p => p.id === order.productId);
+                    const pendingReels = Math.max(0, order.qty - order.dispatchedQty);
+                    const inStockMatching = reels.filter(
+                      r => (r.status === 'IN_STOCK' || r.status === 'IN_STOCK_B' || r.status === 'QC_PASSED') &&
+                           !r.challanNo &&
+                           r.gsm === order.gsm &&
+                           r.size === order.size &&
+                           r.ply === order.ply
+                    );
+                    const hasEnoughStock = inStockMatching.length >= pendingReels;
+
+                    const orderCleanNo = (order.orderNo || order.id || '').trim().toUpperCase();
+                    const orderSlips = slips.filter(s =>
+                      (s.status === 'DISPATCHED' || s.status === 'CONFIRMED') &&
+                      (s.orderNo || '').trim().toUpperCase() === orderCleanNo
+                    );
+                    const orderReelNos = new Set(orderSlips.flatMap(s => s.reelNos || []));
+                    const directDispatchedKg = reels
+                      .filter(r => orderReelNos.has(r.reelNo))
+                      .reduce((sum, r) => sum + (r.weight || 0), 0);
+
+                    const totalWeightKg = order.weightTons ? Math.round(order.weightTons * 1000) : (order.qty * 1250);
+                    const dispatchedWeightKg = directDispatchedKg > 0
+                      ? directDispatchedKg
+                      : (order.qty > 0 && order.dispatchedQty > 0 ? Math.round((order.dispatchedQty / order.qty) * totalWeightKg) : 0);
+                    const remainingWeightKg = Math.max(0, totalWeightKg - dispatchedWeightKg);
+
+                    return (
+                      <div key={order.id} className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-2xl overflow-hidden shadow-xs">
+                        {/* Card Header */}
+                        <div className="flex items-center justify-between px-4 py-3 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-100 dark:border-slate-800">
+                          <div className="flex items-center gap-2 min-w-0 pr-2">
+                            {order.orderNo && (
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-black font-mono bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 shrink-0">
+                                {order.orderNo}
+                              </span>
+                            )}
+                            <span className="text-sm font-bold text-slate-900 dark:text-white truncate">{partyObj?.name || '—'}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border ${
+                              order.status === 'PENDING'
+                                ? 'bg-violet-100 dark:bg-violet-950/40 text-violet-700 dark:text-violet-300 border-violet-200 dark:border-violet-800'
+                                : order.status === 'PARTIAL'
+                                ? 'bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800'
+                                : 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                            }`}>
+                              {order.status}
+                            </span>
+                            {order.status !== 'COMPLETED' && (
+                              <button
+                                type="button"
+                                onClick={() => handleStartChallanFromOrder(order)}
+                                className="px-2 py-0.5 rounded-lg text-[10px] font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800 transition cursor-pointer flex items-center gap-1"
+                              >
+                                <Truck className="h-3 w-3" />
+                                <span>Dispatch</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Card Body */}
+                        <div className="px-4 py-3 space-y-3">
+                          {/* Product */}
+                          <div>
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">Product</span>
+                            <span className="text-xs font-bold text-slate-800 dark:text-slate-200">{prodObj?.name || 'Tissue Paper'}</span>
+                            <span className="text-[11px] text-slate-400 font-mono ml-1.5">
+                              {order.gsm} GSM · {order.size > 100 ? `${Math.round(order.size / 100)} cm` : `${order.size} cm`} · {order.ply}P
+                            </span>
+                          </div>
+
+                          {/* 3-col stats */}
+                          <div className="grid grid-cols-3 gap-2">
+                            <div className="bg-slate-50 dark:bg-slate-800/60 rounded-xl p-2.5 text-center">
+                              <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">
+                                {order.status === 'PARTIAL' ? 'Remaining' : 'Ordered'}
+                              </span>
+                              <span className="text-xs font-bold text-slate-900 dark:text-white font-mono mt-0.5 block">
+                                {order.status === 'PARTIAL'
+                                  ? `${remainingWeightKg.toLocaleString('en-IN')} kg`
+                                  : (order.weightTons ? `${totalWeightKg.toLocaleString('en-IN')} kg` : `${order.qty}R`)}
+                              </span>
+                            </div>
+                            <div className="bg-slate-50 dark:bg-slate-800/60 rounded-xl p-2.5 text-center">
+                              <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">Dispatched</span>
+                              <span className={`text-xs font-bold font-mono mt-0.5 block ${dispatchedWeightKg > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>
+                                {dispatchedWeightKg > 0 ? `${dispatchedWeightKg.toLocaleString('en-IN')} kg` : '0 kg'}
+                              </span>
+                            </div>
+                            <div className="bg-slate-50 dark:bg-slate-800/60 rounded-xl p-2.5 text-center">
+                              <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block">Due Date</span>
+                              <span className="text-[10px] font-bold text-slate-600 dark:text-slate-400 font-mono mt-0.5 block">
+                                {(order.receiveDate || order.dueDate)?.slice(5) || '—'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Stock Badge */}
+                          <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-bold border w-full justify-center ${
+                            hasEnoughStock
+                              ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                              : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800'
+                          }`}>
+                            <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${hasEnoughStock ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                            {hasEnoughStock
+                              ? `Ready · ${inStockMatching.length} in stock`
+                              : `Shortfall · ${inStockMatching.length}/${pendingReels} in stock`}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Form Section */}
+          <div className="bg-white dark:bg-surface-dark rounded-3xl p-6 shadow-sm space-y-4">
+            <h3 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider mb-4 border-b border-slate-100 dark:border-slate-800 pb-3 flex items-center gap-2">
+              <Plus className="h-4 w-4 text-primary" />
+              Register New Order Booking
+            </h3>
+
+            <form onSubmit={handleOrderSubmit} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                {/* 1. Order No Field */}
+                <div>
+                  <label className="block text-[11px] font-black text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <Hash className="h-3.5 w-3.5 text-primary" />
+                      ORDER NO
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-normal">
+                      {orderNo.trim() ? 'Custom' : 'Auto'}
+                    </span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={orderNo}
+                      onChange={e => setOrderNo(e.target.value)}
+                      placeholder={defaultOrderNo}
+                      className="w-full py-2.5 px-3.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs font-bold font-mono focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:text-white"
+                    />
+                  </div>
+                </div>
+
+                {/* 2. Customer Party */}
+                <div>
+                  <CustomSearchableSelect
+                    label="SELECT CUSTOMER PARTY *"
+                    placeholder="-- Choose Customer Party --"
+                    value={selectedPartyId}
+                    onChange={setSelectedPartyId}
+                    options={activeParties.map(p => ({
+                      value: p.id,
+                      label: p.name,
+                      sublabel: p.address,
+                    }))}
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* Products Section with Multi-Product Support */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
+                  <label className="text-[11px] font-black text-slate-700 dark:text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <Package className="h-3.5 w-3.5 text-primary" />
+                    SELECT PRODUCTS ({orderProductLines.length})
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleAddOrderProductLine}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-primary hover:bg-primary/90 text-white text-[11px] font-black transition cursor-pointer shadow-xs active:scale-95"
+                    title="Add another product to this order"
+                  >
+                    <Plus className="h-3 w-3" />
+                    <span>Add Product</span>
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {orderProductLines.map((line, idx) => (
+                    <div
+                      key={line.id}
+                      className="p-3.5 rounded-2xl bg-slate-50/80 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-800 space-y-3 relative"
+                    >
+                      {/* Product Header: Number Tag & Delete Button */}
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-black text-primary dark:text-blue-400 font-mono px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-950/60 border border-blue-200/60 dark:border-blue-800/60 uppercase">
+                          Product #{idx + 1}
+                        </span>
+
+                        {orderProductLines.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveOrderProductLine(line.id)}
+                            className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition cursor-pointer"
+                            title="Remove this product"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Product Selector Row with inline Plus Button on right */}
+                      <div className="flex items-end gap-2">
+                        <div className="flex-1 min-w-0">
+                          <CustomSearchableSelect
+                            label={`SELECT PRODUCT ${idx === 0 ? '*' : ''}`}
+                            placeholder="-- Choose Product --"
+                            value={line.productId}
+                            onChange={(val) => handleUpdateOrderProductLine(line.id, { productId: val })}
+                            options={products.filter(p => p.active !== false).map(p => {
+                              const rawSize = p.size || 30;
+                              const sz = rawSize > 100 ? Math.round(rawSize / 100) : rawSize;
+                              return {
+                                value: p.id,
+                                label: `${p.name} (${p.gsm} GSM, ${sz} cm)`,
+                              };
+                            })}
+                            required={idx === 0}
+                          />
+                        </div>
+                        {idx === orderProductLines.length - 1 && (
+                          <button
+                            type="button"
+                            onClick={handleAddOrderProductLine}
+                            className="h-[38px] px-3 rounded-xl bg-primary hover:bg-primary/90 text-white font-black text-xs transition cursor-pointer flex items-center gap-1 shrink-0 shadow-xs active:scale-95"
+                            title="Add another product"
+                          >
+                            <Plus className="h-4 w-4" />
+                            <span className="hidden sm:inline">Add</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Specs Row 1: GSM & Size (cm) */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">GSM</label>
+                          <input
+                            type="number"
+                            value={line.gsm}
+                            onChange={e => handleUpdateOrderProductLine(line.id, { gsm: e.target.value })}
+                            className="w-full p-2 bg-white dark:bg-slate-800 rounded-xl text-xs font-bold font-mono dark:text-white border border-slate-200 dark:border-slate-700"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">Size (cm)</label>
+                          <input
+                            type="number"
+                            value={line.size}
+                            placeholder="30"
+                            onChange={e => handleUpdateOrderProductLine(line.id, { size: e.target.value })}
+                            className="w-full p-2 bg-white dark:bg-slate-800 rounded-xl text-xs font-bold font-mono dark:text-white border border-slate-200 dark:border-slate-700"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Specs Row 2: Ply (Left) & Weight in kg (Right) */}
+                      <div className="grid grid-cols-2 gap-2 items-end">
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">Ply</label>
+                          <CustomSearchableSelect
+                            size="sm"
+                            value={line.ply}
+                            onChange={val => handleUpdateOrderProductLine(line.id, { ply: val })}
+                            options={[
+                              { value: '1', label: '1 Ply' },
+                              { value: '2', label: '2 Ply' },
+                              { value: '3', label: '3 Ply' },
+                            ]}
+                            hideSearch
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">Weight (kg)</label>
+                          <input
+                            type="number"
+                            step="any"
+                            value={line.weightTons}
+                            onChange={e => {
+                              const val = e.target.value;
+                              const newQty = val ? String(Math.round((parseFloat(val) || 0) / 1200)) : '1';
+                              handleUpdateOrderProductLine(line.id, { weightTons: val, qty: newQty });
+                            }}
+                            className="w-full p-2 bg-white dark:bg-slate-800 rounded-xl text-xs font-bold font-mono text-emerald-600 dark:text-emerald-400 border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-primary"
+                            placeholder="25000"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Receive Date */}
+              <div className="relative">
+                <label className="block text-[11px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
+                  Receive Date
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setOpenOrderDuePicker(prev => !prev)}
+                  className="w-full flex items-center justify-between py-2.5 px-3.5 bg-slate-50 dark:bg-slate-900 rounded-2xl text-xs font-bold text-slate-800 dark:text-white cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition border border-slate-200 dark:border-slate-700"
+                >
+                  <span className={orderReceiveDate ? 'font-bold font-mono' : 'text-slate-400 font-normal'}>
+                    {orderReceiveDate || 'dd-mm-yyyy'}
+                  </span>
+                  <Calendar className="h-4 w-4 text-primary dark:text-blue-400" />
+                </button>
+                {openOrderDuePicker && (
+                  <CustomDatePickerModal
+                    selectedDate={orderReceiveDate}
+                    onSelectDate={(newDate) => {
+                      setOrderReceiveDate(newDate);
+                      setOpenOrderDuePicker(false);
+                    }}
+                    onClose={() => setOpenOrderDuePicker(false)}
+                    allowFuture={true}
+                  />
+                )}
+              </div>
+
+              <button
+                type="submit"
+                disabled={isViewer}
+                title={isViewer ? 'Viewer Mode: Booking customer orders is locked (Read-Only)' : 'Book Customer Order'}
+                className={`w-full py-3 text-xs uppercase tracking-wider rounded-2xl font-black transition flex items-center justify-center gap-2 ${
+                  isViewer
+                    ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed border border-slate-300 dark:border-slate-700 shadow-none'
+                    : 'btn-primary-gradient cursor-pointer font-black shadow-lg'
+                }`}
+              >
+                {isViewer ? <Lock className="h-4 w-4 text-amber-500" /> : null}
+                <span>{isViewer ? 'Book Customer Order (Locked)' : 'Book Customer Order'}</span>
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  })()}
+
+      {/* 2. TAB: Create Draft Packing Slip */}
+      {activeTab === 'create_slip' && (
+        <form
+          onSubmit={handleSlipSubmit}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && (e.target as HTMLElement).tagName === 'INPUT') {
+              const inputEl = e.target as HTMLInputElement;
+              if (inputEl.placeholder?.includes('Scan / Type Reel Number')) {
+                return; // let rapid reel entry handle its own submit
+              }
+              e.preventDefault();
+            }
+          }}
+          className="flex flex-col gap-5 w-full items-stretch"
+        >
+          
+          {/* Top Challan Header & Dispatch Form (Full-Width Card) */}
+          <div className="neumorphic-card p-5 sm:p-6 space-y-4 text-left w-full">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3.5">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400">
+                  <FileText className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900 dark:text-white tracking-tight">
+                    Create Gate Pass Challan
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium">
+                    Fill dispatch details above and select warehouse reels below
+                  </p>
+                </div>
+              </div>
+              <span className="px-3 py-1 rounded-full bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-300 text-xs font-black uppercase tracking-wider border border-blue-200 dark:border-blue-800 font-mono">
+                CHALLAN #{autoSlipNo}
+              </span>
+            </div>
+
+            {/* Form Fields in 5-Column Responsive Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
+              {/* 1. Editable Challan / Receipt No (Defaults to next sequence starting with PS-...) */}
+              <div>
+                <label className="block text-[11px] font-extrabold text-slate-700 dark:text-slate-300 mb-1.5 flex items-center justify-between">
+                  <span>Challan / Receipt No</span>
+                  <span className="text-[10px] text-slate-400 font-normal">
+                    {slipNo.trim() ? 'Custom' : 'Auto'}
+                  </span>
+                </label>
+                <div className="relative">
+                  <Hash className="h-4 w-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={slipNo}
+                    onChange={e => setSlipNo(e.target.value)}
+                    placeholder={defaultReceiptNo}
+                    className="w-full py-2.5 pl-9 pr-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs font-bold font-mono focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:text-white"
+                  />
+                </div>
+              </div>
+              {/* Custom Modern Searchable Party Dropdown */}
+              <div className="relative" ref={partyDropdownRef}>
+                <label className="block text-[11px] font-extrabold text-slate-700 dark:text-slate-300 mb-1.5 flex items-center justify-between">
+                  <span>Customer / Party Name</span>
+                  {selectedParty && (
+                    <span className="text-[10px] text-blue-600 dark:text-blue-400 font-bold">
+                      Selected
+                    </span>
+                  )}
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsPartyDropdownOpen(prev => !prev);
+                    setPartySearchQuery('');
+                  }}
+                  className={`w-full flex items-center justify-between py-2.5 px-3 bg-slate-50 dark:bg-slate-900 border rounded-2xl text-xs font-bold transition cursor-pointer text-left ${
+                    isPartyDropdownOpen
+                      ? 'border-blue-500 ring-2 ring-blue-500/20 bg-white dark:bg-slate-800'
+                      : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <Building2 className={`h-4 w-4 shrink-0 ${selectedParty ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400'}`} />
+                    <span className={`truncate ${selectedParty ? 'text-slate-900 dark:text-white font-extrabold' : 'text-slate-400 font-normal'}`}>
+                      {selectedParty ? selectedParty.name : '-- Select Customer Party --'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0 ml-1.5">
+                    {selectedParty && (
+                      <span
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSlipPartyId('');
+                        }}
+                        className="p-1 text-slate-400 hover:text-red-500 cursor-pointer rounded-full hover:bg-slate-100 dark:hover:bg-slate-700"
+                        title="Clear party"
+                      >
+                        <X className="h-3 w-3" />
+                      </span>
+                    )}
+                    <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform duration-200 ${isPartyDropdownOpen ? 'rotate-180 text-blue-600' : ''}`} />
+                  </div>
+                </button>
+
+                {/* Dropdown Popup Menu */}
+                {isPartyDropdownOpen && (
+                  <div className="absolute top-full left-0 right-0 mt-1.5 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 min-w-[240px]">
+                    {/* Search inside Dropdown */}
+                    <div className="p-2 border-b border-slate-100 dark:border-slate-700/80 bg-slate-50/70 dark:bg-slate-900/60">
+                      <div className="relative">
+                        <Search className="h-3.5 w-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={partySearchQuery}
+                          onChange={e => setPartySearchQuery(e.target.value)}
+                          placeholder="Search customer party..."
+                          className="w-full py-1.5 pl-8 pr-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold focus:outline-none dark:text-white"
+                          autoFocus
+                          onClick={e => e.stopPropagation()}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Party Options List */}
+                    <div className="max-h-56 overflow-y-auto p-1.5 space-y-1">
+                      {filteredPartyOptions.length === 0 ? (
+                        <div className="py-4 text-center text-xs text-slate-400 font-semibold">
+                          No matching customer party found
+                        </div>
+                      ) : (
+                        filteredPartyOptions.map(p => {
+                          const isSelected = slipPartyId === p.id;
+                          return (
+                            <button
+                              key={p.id}
+                              type="button"
+                              onClick={() => {
+                                setSlipPartyId(p.id);
+                                setIsPartyDropdownOpen(false);
+                              }}
+                              className={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
+                                isSelected
+                                  ? 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-extrabold'
+                                  : 'hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-800 dark:text-slate-200'
+                              }`}
+                            >
+                              <div className="min-w-0 flex-1 pr-2">
+                                <div className="truncate text-slate-900 dark:text-white font-extrabold">{p.name}</div>
+                                {p.address && (
+                                  <div className="text-[10px] text-slate-400 font-normal truncate mt-0.5">
+                                    {p.address}
+                                  </div>
+                                )}
+                              </div>
+                              {isSelected && (
+                                <Check className="h-4 w-4 text-blue-600 dark:text-blue-400 shrink-0" />
+                              )}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Order No (Searchable Dropdown / Link) */}
+              <div className="relative" ref={orderDropdownRef}>
+                <label className="block text-[11px] font-extrabold text-slate-700 dark:text-slate-300 mb-1.5 flex items-center justify-between">
+                  <span>Order No</span>
+                  {availableOrderOptions.length > 0 && (
+                    <span className="text-[10px] text-blue-600 dark:text-blue-400 font-bold">
+                      {availableOrderOptions.length} Active {slipPartyId ? 'for Party' : 'Orders'}
+                    </span>
+                  )}
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsOrderDropdownOpen(prev => !prev);
+                    setOrderDropdownSearchQuery('');
+                  }}
+                  className={`w-full flex items-center justify-between py-2.5 px-3 bg-slate-50 dark:bg-slate-900 border rounded-2xl text-xs font-bold transition cursor-pointer text-left ${
+                    isOrderDropdownOpen
+                      ? 'border-blue-500 ring-2 ring-blue-500/20 bg-white dark:bg-slate-800'
+                      : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <FileText className={`h-4 w-4 shrink-0 ${slipOrderNo ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400'}`} />
+                    <span className={`truncate font-mono ${slipOrderNo ? 'text-slate-900 dark:text-white font-extrabold' : 'text-slate-400 font-sans font-normal'}`}>
+                      {slipOrderNo ? slipOrderNo : '-- Select or Link Order No --'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0 ml-1.5">
+                    {slipOrderNo && (
+                      <span
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleClearOrder();
+                        }}
+                        className="p-1 text-slate-400 hover:text-red-500 cursor-pointer rounded-full hover:bg-slate-100 dark:hover:bg-slate-700"
+                        title="Clear order no"
+                      >
+                        <X className="h-3 w-3" />
+                      </span>
+                    )}
+                    <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform duration-200 ${isOrderDropdownOpen ? 'rotate-180 text-blue-600' : ''}`} />
+                  </div>
+                </button>
+
+                {/* Dropdown Popup Menu */}
+                {isOrderDropdownOpen && (
+                  <div className="absolute top-full left-0 right-0 mt-1.5 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150 min-w-[280px]">
+                    {/* Search inside Dropdown */}
+                    <div className="p-2 border-b border-slate-100 dark:border-slate-700/80 bg-slate-50/70 dark:bg-slate-900/60">
+                      <div className="relative">
+                        <Search className="h-3.5 w-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={orderDropdownSearchQuery}
+                          onChange={e => setOrderDropdownSearchQuery(e.target.value)}
+                          placeholder="Search order no, customer, product..."
+                          className="w-full py-1.5 pl-8 pr-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold focus:outline-none dark:text-white uppercase placeholder:normal-case placeholder:font-sans"
+                          autoFocus
+                          onClick={e => e.stopPropagation()}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Order Options List */}
+                    <div className="max-h-60 overflow-y-auto p-1.5 space-y-1">
+                      {orderDropdownSearchQuery.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSlipOrderNo(orderDropdownSearchQuery.trim().toUpperCase());
+                            setIsOrderDropdownOpen(false);
+                          }}
+                          className="w-full flex items-center gap-2 p-2.5 rounded-xl text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-50/60 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition text-left cursor-pointer border border-dashed border-blue-300 dark:border-blue-700 mb-1"
+                        >
+                          <Plus className="h-3.5 w-3.5 shrink-0" />
+                          <span>Use custom: <strong className="font-mono">{orderDropdownSearchQuery.trim().toUpperCase()}</strong></span>
+                        </button>
+                      )}
+
+                      {filteredOrderOptions.length === 0 ? (
+                        <div className="py-4 text-center text-xs text-slate-400 font-semibold">
+                          {orderDropdownSearchQuery.trim() ? 'No matching orders found' : 'No active pending orders available'}
+                        </div>
+                      ) : (
+                        filteredOrderOptions.map(o => {
+                          const isSelected = slipOrderNo.trim().toUpperCase() === o.orderNo.toUpperCase();
+                          return (
+                            <button
+                              key={o.orderNo}
+                              type="button"
+                              onClick={() => handleSelectOrder(o.orderNo, o.partyId)}
+                              className={`w-full p-2.5 rounded-xl text-left cursor-pointer transition flex items-center justify-between gap-2 ${
+                                isSelected
+                                  ? 'bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800'
+                                  : 'hover:bg-slate-50 dark:hover:bg-slate-700/60'
+                              }`}
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono font-black text-xs text-blue-600 dark:text-blue-400 shrink-0">{o.orderNo}</span>
+                                  <span className="text-xs font-extrabold text-slate-900 dark:text-white truncate">{o.partyName}</span>
+                                  <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ml-auto shrink-0 ${
+                                    o.status === 'PARTIAL' ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300' : 'bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300'
+                                  }`}>
+                                    {o.status}
+                                  </span>
+                                </div>
+                                <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-1 flex items-center justify-between gap-2 truncate">
+                                  <span className="truncate">{o.productsSummary}</span>
+                                  <span className="font-mono font-bold text-slate-700 dark:text-slate-300 shrink-0">
+                                    {o.remainingWeightKg.toLocaleString()} kg
+                                  </span>
+                                </div>
+                              </div>
+                              {isSelected && <Check className="h-4 w-4 text-blue-600 dark:text-blue-400 shrink-0" />}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-extrabold text-slate-700 dark:text-slate-300 mb-1.5 flex items-center justify-between">
+                  <span>Vehicle / Truck No</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    list="dispatch-truck-suggestions"
+                    value={slipVehicleId}
+                    onChange={e => setSlipVehicleId(e.target.value)}
+                    className="w-full py-2.5 px-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs font-bold focus:outline-none dark:text-white uppercase font-mono placeholder:normal-case placeholder:font-sans"
+                    placeholder="e.g. GJ-05-BX-4921"
+                  />
+                  <datalist id="dispatch-truck-suggestions">
+                    {vehicles.filter(v => v.active !== false).map(v => (
+                      <option key={v.id} value={v.vehicleNo}>{v.vehicleNo}</option>
+                    ))}
+                  </datalist>
+                </div>
+              </div>
+
+              <div className="relative">
+                <label className="block text-[11px] font-extrabold text-slate-700 dark:text-slate-300 mb-1.5">
+                  Dispatch Date
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setOpenSlipDatePicker(prev => !prev)}
+                  className="w-full flex items-center justify-between py-2.5 px-3.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs font-bold text-slate-800 dark:text-white cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+                >
+                  <span className={slipDate ? 'font-mono' : 'text-slate-400 font-normal'}>{slipDate || 'dd-mm-yyyy'}</span>
+                  <Calendar className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                </button>
+                {openSlipDatePicker && (
+                  <CustomDatePickerModal
+                    selectedDate={slipDate}
+                    onSelectDate={(newDate) => {
+                      setSlipDate(newDate);
+                      setOpenSlipDatePicker(false);
+                    }}
+                    onClose={() => setOpenSlipDatePicker(false)}
+                    allowFuture={true}
+                  />
+                )}
+              </div>
+            </div>
+
+            {/* Bottom summary bar with Weight Tally + Dispatch Action Button */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 pt-3 border-t border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-4 flex-wrap">
+                <div className="px-4 py-2.5 bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-700/80 rounded-2xl flex items-center gap-3">
+                  <span className="text-[11px] font-black text-slate-400 uppercase tracking-wider">
+                    Total Loaded:
+                  </span>
+                  <span className="text-sm font-black font-mono text-primary dark:text-blue-400">
+                    {selectedReelNos.length} Reels
+                  </span>
+                  <span className="text-slate-300 dark:text-slate-700">|</span>
+                  <span className="text-base font-black font-mono text-emerald-600 dark:text-emerald-400">
+                    {availableReels.filter(r => selectedReelNos.includes(r.reelNo)).reduce((sum, r) => sum + (r.weight || 0), 0).toLocaleString()} <span className="text-xs text-slate-400 font-normal">KG</span>
+                  </span>
+                </div>
+
+                {/* Linked Order Target Box ("Target Weight") */}
+                {linkedOrderGroup && (() => {
+                  const loadedWeight = availableReels.filter(r => selectedReelNos.includes(r.reelNo)).reduce((sum, r) => sum + (r.weight || 0), 0);
+                  const isTargetMet = loadedWeight >= linkedOrderGroup.remainingWeightKg && linkedOrderGroup.remainingWeightKg > 0;
+                  return (
+                    <div className={`px-4 py-2.5 rounded-2xl flex items-center gap-2.5 border shadow-2xs transition ${
+                      isTargetMet
+                        ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/80 text-emerald-700 dark:text-emerald-300'
+                        : 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800/80 text-amber-700 dark:text-amber-300'
+                    }`}>
+                      <span className="text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5">
+                        <Target className="h-3.5 w-3.5 shrink-0" />
+                        Target Weight:
+                      </span>
+                      <span className="text-base font-black font-mono">
+                        {linkedOrderGroup.remainingWeightKg.toLocaleString()} <span className="text-xs font-normal opacity-70">KG</span>
+                      </span>
+                      {isTargetMet && (
+                        <span className="ml-1 px-2 py-0.5 rounded-md text-[10px] font-black uppercase bg-emerald-200/60 dark:bg-emerald-800/60 text-emerald-900 dark:text-emerald-100">
+                          Target Met ✓
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                <div className="text-xs text-slate-500 font-semibold">
+                  {receiverSig ? (
+                    <span className="text-slate-600 dark:text-slate-300">Receiver: {receiverSig}</span>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => handleTabChange('qr_scanner')}
+                  className="md:hidden px-3.5 py-2.5 rounded-2xl text-xs font-black text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 border border-blue-200 dark:border-blue-800 cursor-pointer transition flex items-center gap-1.5"
+                  title="Open Mobile QR Scanner"
+                >
+                  <QrCode className="h-4 w-4" />
+                  <span>Scan QR</span>
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={isViewer}
+                  title={isViewer ? 'Viewer Mode: Dispatch is locked (Read-Only)' : 'Print Gate Pass & Dispatch'}
+                  className={`py-3 px-6 text-xs uppercase tracking-wider flex items-center justify-center gap-2 rounded-2xl font-black transition ${
+                    isViewer
+                      ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed border border-slate-300 dark:border-slate-700 shadow-none'
+                      : 'btn-primary-gradient cursor-pointer'
+                  }`}
+                >
+                  {isViewer ? <Lock className="h-4 w-4 text-amber-500" /> : <Truck className="h-4 w-4" />}
+                  <span>{isViewer ? 'Print Gate Pass & Dispatch (Locked)' : 'Print Gate Pass & Dispatch'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* 4. WAREHOUSE STOCK REELS SUMMARY (Product-wise, GSM & Weight breakdown with reel counts) */}
+          <div className="neumorphic-card p-4 sm:p-6 space-y-5 border border-slate-200 dark:border-slate-800">
+            {/* Header row */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400">
+                  <Package className="h-5 w-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base sm:text-lg font-black text-slate-900 dark:text-white tracking-tight">
+                      Warehouse Stock Summary
+                    </h3>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300">
+                      Live Inventory
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                    Product-wise inventory breakdown by GSM, reel count, and total weight
+                  </p>
+                </div>
+              </div>
+
+              {/* Quick action buttons */}
+              {selectedReelNos.length > 0 && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedReelNos([]);
+                      playBeep();
+                    }}
+                    className="px-3 py-1.5 rounded-xl text-xs font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/40 border border-rose-200 dark:border-rose-800 transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    <span>Clear Selection ({selectedReelNos.length})</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Overall Inventory Stat Cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60">
+                <div className="flex items-center justify-between text-slate-400 mb-1">
+                  <span className="text-[11px] font-black uppercase tracking-wider">Products</span>
+                  <Package className="h-4 w-4 text-blue-500" />
+                </div>
+                <div className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white font-mono">
+                  {stockGrandTotals.uniqueProductsCount}
+                </div>
+                <div className="text-[11px] text-slate-400 font-semibold">Available product lines</div>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60">
+                <div className="flex items-center justify-between text-slate-400 mb-1">
+                  <span className="text-[11px] font-black uppercase tracking-wider">Total Reels</span>
+                  <Layers className="h-4 w-4 text-indigo-500" />
+                </div>
+                <div className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white font-mono">
+                  {stockGrandTotals.totalReels} <span className="text-xs font-normal text-slate-400">Reels</span>
+                </div>
+                <div className="text-[11px] text-slate-400 font-semibold">Ready in warehouse</div>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60">
+                <div className="flex items-center justify-between text-slate-400 mb-1">
+                  <span className="text-[11px] font-black uppercase tracking-wider">Stock Weight</span>
+                  <Scale className="h-4 w-4 text-emerald-500" />
+                </div>
+                <div className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400 font-mono">
+                  {stockGrandTotals.totalWeight.toLocaleString()} <span className="text-xs font-normal text-slate-400">KG</span>
+                </div>
+                <div className="text-[11px] text-slate-400 font-semibold font-mono">
+                  {(stockGrandTotals.totalWeight / 1000).toFixed(2)} MT (Metric Tons)
+                </div>
+              </div>
+
+              <div className={`p-3.5 rounded-2xl border transition ${
+                stockGrandTotals.selectedCount > 0
+                  ? 'bg-blue-50/80 dark:bg-blue-950/40 border-blue-300 dark:border-blue-700'
+                  : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700/60'
+              }`}>
+                <div className="flex items-center justify-between text-slate-400 mb-1">
+                  <span className="text-[11px] font-black uppercase tracking-wider">Selected Dispatch</span>
+                  <CheckCircle className={`h-4 w-4 ${stockGrandTotals.selectedCount > 0 ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400'}`} />
+                </div>
+                <div className={`text-xl sm:text-2xl font-black font-mono ${stockGrandTotals.selectedCount > 0 ? 'text-blue-600 dark:text-blue-400' : 'text-slate-900 dark:text-white'}`}>
+                  {stockGrandTotals.selectedCount} <span className="text-xs font-normal text-slate-400">Reels</span>
+                </div>
+                <div className="text-[11px] text-slate-400 font-semibold font-mono">
+                  {stockGrandTotals.selectedWeight.toLocaleString()} KG ({(stockGrandTotals.selectedWeight / 1000).toFixed(2)} MT)
+                </div>
+              </div>
+            </div>
+
+            {/* Search filter row */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
+              <div className="relative flex-1">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                <input
+                  type="text"
+                  value={summarySearchQuery}
+                  onChange={e => setSummarySearchQuery(e.target.value)}
+                  placeholder="Filter stock summary by Product, GSM (e.g. 18), Size, or Reel No..."
+                  className="w-full pl-10 pr-9 py-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-900/60 text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+                {summarySearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSummarySearchQuery('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer p-0.5"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 font-bold shrink-0">
+                <span>Showing {productStockSummary.length} of {stockGrandTotals.uniqueProductsCount} Products</span>
+              </div>
+            </div>
+
+            {/* Product List-type breakdown section */}
+            {productStockSummary.length === 0 ? (
+              <div className="p-8 text-center rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700/60 space-y-2">
+                <Package className="h-10 w-10 text-slate-300 dark:text-slate-600 mx-auto" />
+                <p className="text-sm font-black text-slate-700 dark:text-slate-300">
+                  {availableReels.length === 0 ? 'No Warehouse Stock Available' : 'No Matching Stock Found'}
+                </p>
+                <p className="text-xs text-slate-400">
+                  {availableReels.length === 0
+                    ? 'Finished stock reels from the rewinder will automatically appear here once QC checked.'
+                    : `No products or GSMs matched "${summarySearchQuery}". Try clearing the search.`}
+                </p>
+                {summarySearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSummarySearchQuery('')}
+                    className="mt-2 px-3 py-1.5 rounded-xl text-xs font-bold bg-primary text-white hover:bg-primary/90 transition cursor-pointer"
+                  >
+                    Clear Search
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {productStockSummary.map(prodItem => {
+                  const isExpanded = expandedProducts[prodItem.product] !== false;
+                  const allProdSelected = prodItem.totalReels > 0 && prodItem.selectedReelsCount === prodItem.totalReels;
+                  const someProdSelected = prodItem.selectedReelsCount > 0 && !allProdSelected;
+
+                  return (
+                    <div
+                      key={prodItem.product}
+                      className="rounded-2xl border border-slate-200 dark:border-slate-700/80 bg-white dark:bg-slate-900 shadow-sm overflow-hidden transition"
+                    >
+                      {/* Product Card Header */}
+                      <div className="p-3.5 sm:p-4 bg-slate-50/80 dark:bg-slate-800/70 border-b border-slate-200/80 dark:border-slate-700/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex items-start sm:items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => toggleProductExpand(prodItem.product)}
+                            className="p-1.5 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 transition cursor-pointer shrink-0 mt-0.5 sm:mt-0"
+                            title={isExpanded ? 'Collapse Product' : 'Expand Product'}
+                          >
+                            {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                          </button>
+
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm sm:text-base font-black text-slate-900 dark:text-white">
+                                {prodItem.product}
+                              </span>
+                              {prodItem.selectedReelsCount > 0 && (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1 font-mono">
+                                  <Check className="h-3 w-3" />
+                                  {prodItem.selectedReelsCount} / {prodItem.totalReels} Selected ({prodItem.selectedWeight.toLocaleString()} KG)
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 font-semibold mt-0.5 flex-wrap">
+                              <span>{prodItem.specs.length} {prodItem.specs.length === 1 ? 'Specification' : 'Specifications'}</span>
+                              <span>•</span>
+                              <span>{prodItem.totalReels} {prodItem.totalReels === 1 ? 'Reel' : 'Reels'} in stock</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Product summary numbers and Select All action */}
+                        <div className="flex items-center gap-2 sm:gap-3 shrink-0 self-end sm:self-auto flex-wrap">
+                          <div className="px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/50 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 font-mono text-xs font-black">
+                            {prodItem.totalReels} {prodItem.totalReels === 1 ? 'Reel' : 'Reels'}
+                          </div>
+
+                          <div className="px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-mono text-xs font-black">
+                            {prodItem.totalWeight.toLocaleString()} KG
+                            <span className="text-[10px] font-normal text-slate-400 ml-1">
+                              ({(prodItem.totalWeight / 1000).toFixed(2)} MT)
+                            </span>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleToggleProductSelection(prodItem.reels)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                              allProdSelected
+                                ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                                : someProdSelected
+                                ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-200 border border-blue-300 dark:border-blue-700'
+                                : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700'
+                            }`}
+                            title={allProdSelected ? 'Deselect all reels of this product' : 'Select all reels of this product for dispatch'}
+                          >
+                            {allProdSelected ? (
+                              <>
+                                <X className="h-3.5 w-3.5" />
+                                <span>Deselect All</span>
+                              </>
+                            ) : (
+                              <>
+                                <CheckSquare className="h-3.5 w-3.5" />
+                                <span>Select All ({prodItem.totalReels})</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Specifications List (Clean List-type Layout per Product) */}
+                      {isExpanded && (
+                        <div className="divide-y divide-slate-100 dark:divide-slate-800/80 bg-white dark:bg-slate-900">
+                          {prodItem.specs.map(item => {
+                            const isSpecExpanded = !!expandedSpecs[item.key];
+                            const allSpecSelected = item.reelCount > 0 && item.selectedReelsCount === item.reelCount;
+                            const someSpecSelected = item.selectedReelsCount > 0 && !allSpecSelected;
+
+                            return (
+                              <div
+                                key={item.key}
+                                className={`p-3.5 sm:p-4 hover:bg-slate-50/70 dark:hover:bg-slate-800/30 transition ${
+                                  allSpecSelected ? 'bg-blue-50/30 dark:bg-blue-950/20' : ''
+                                }`}
+                              >
+                                {/* Main spec item summary row */}
+                                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                                  {/* Left: Spec details */}
+                                  <div className="flex items-center gap-2.5 flex-wrap">
+                                    <span className="px-3 py-1 rounded-xl text-xs font-black font-mono bg-blue-100 text-blue-800 dark:bg-blue-950/80 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                                      {item.gsm} GSM
+                                    </span>
+
+                                    {item.size ? (
+                                      <span className="px-2.5 py-1 rounded-xl text-xs font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                                        Size: {item.size > 100 ? `${Math.round(item.size / 100)} cm` : `${item.size} cm`}
+                                      </span>
+                                    ) : null}
+
+                                    {item.ply > 1 && (
+                                      <span className="px-2 py-0.5 rounded-lg text-[11px] font-bold bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                                        {item.ply}-Ply
+                                      </span>
+                                    )}
+
+                                    {item.selectedReelsCount > 0 && (
+                                      <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black font-mono ${
+                                        allSpecSelected
+                                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                          : 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                                      }`}>
+                                        <Check className="h-3 w-3" />
+                                        {item.selectedReelsCount}/{item.reelCount} Selected
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {/* Middle: Reel Count and Total Weight */}
+                                  <div className="flex items-center gap-4 sm:gap-6 flex-wrap">
+                                    <div className="flex items-center gap-1.5 font-mono text-xs">
+                                      <span className="text-slate-400 font-semibold">Count:</span>
+                                      <span className="font-black text-indigo-700 dark:text-indigo-300 px-2.5 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800">
+                                        {item.reelCount} {item.reelCount === 1 ? 'Reel' : 'Reels'}
+                                      </span>
+                                    </div>
+
+                                    <div className="flex items-center gap-1.5 font-mono text-xs">
+                                      <span className="text-slate-400 font-semibold">Total Weight:</span>
+                                      <span className="font-black text-slate-900 dark:text-white">
+                                        {item.totalWeight.toLocaleString()} KG
+                                      </span>
+                                      <span className="text-[11px] font-normal text-slate-400">
+                                        ({(item.totalWeight / 1000).toFixed(2)} MT)
+                                      </span>
+                                    </div>
+
+                                    {item.reelCount > 1 && (
+                                      <div className="hidden lg:flex items-center gap-1 font-mono text-[11px] text-slate-400">
+                                        <span>(Avg ~{item.avgWeight} KG)</span>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Right: Actions */}
+                                  <div className="flex items-center gap-2 shrink-0 self-end md:self-auto">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleSpecSelection(item.reels)}
+                                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                                        allSpecSelected
+                                          ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
+                                          : 'bg-primary/10 text-primary hover:bg-primary/20 dark:bg-blue-950/40 dark:text-blue-300 border border-primary/20'
+                                      }`}
+                                      title={allSpecSelected ? 'Deselect specification reels' : 'Select all reels of this spec for dispatch'}
+                                    >
+                                      {allSpecSelected ? (
+                                        <>
+                                          <X className="h-3.5 w-3.5" />
+                                          <span>Deselect</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Check className="h-3.5 w-3.5" />
+                                          <span>Select All ({item.reelCount})</span>
+                                        </>
+                                      )}
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleSpecExpand(item.key)}
+                                      className={`px-2.5 py-1.5 rounded-xl text-xs font-medium transition flex items-center gap-1 cursor-pointer border ${
+                                        isSpecExpanded
+                                          ? 'bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-100 border-slate-300 dark:border-slate-600'
+                                          : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-750'
+                                      }`}
+                                      title={isSpecExpanded ? 'Hide individual reel tags' : 'View individual reel tags'}
+                                    >
+                                      <span>Reels</span>
+                                      {isSpecExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Expandable individual reel chips */}
+                                {isSpecExpanded && (
+                                  <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800/80 space-y-2">
+                                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                                      <span>
+                                        Reels of {prodItem.product} ({item.gsm} GSM • {item.size} MM) — Click to toggle for dispatch:
+                                      </span>
+                                      <span className="font-mono">
+                                        {item.selectedReelsCount} of {item.reelCount} selected ({item.selectedWeight.toLocaleString()} KG)
+                                      </span>
+                                    </div>
+
+                                    <div className="flex flex-wrap gap-2">
+                                      {item.reels.map(r => {
+                                        const isSelected = selectedReelNos.includes(r.reelNo);
+                                        return (
+                                          <div
+                                            key={r.reelNo}
+                                            className={`group/chip inline-flex items-center rounded-xl border transition shadow-2xs ${
+                                              isSelected
+                                                ? 'bg-blue-600 text-white border-blue-600 shadow-sm dark:bg-blue-500 dark:border-blue-500'
+                                                : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:border-blue-400 dark:hover:border-blue-500'
+                                            }`}
+                                          >
+                                            <button
+                                              type="button"
+                                              onClick={() => handleToggleSingleReel(r.reelNo)}
+                                              className="px-2.5 py-1.5 text-xs font-mono font-bold flex items-center gap-1.5 cursor-pointer"
+                                              title={`Click to toggle Reel ${r.reelNo} for dispatch`}
+                                            >
+                                              <span className={`w-3.5 h-3.5 rounded-md flex items-center justify-center border text-[9px] ${
+                                                isSelected
+                                                  ? 'bg-white text-blue-600 border-white'
+                                                  : 'border-slate-300 dark:border-slate-600'
+                                              }`}>
+                                                {isSelected ? '✓' : ''}
+                                              </span>
+                                              <span>{r.reelNo}</span>
+                                              <span className={`text-[10px] px-1.5 py-0.2 rounded font-normal ${
+                                                isSelected ? 'bg-blue-700/50 text-white' : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-300'
+                                              }`}>
+                                                {r.weight || 0} KG
+                                              </span>
+                                              {r.size ? (
+                                                <span className={`text-[10px] ${isSelected ? 'text-blue-100' : 'text-slate-400'}`}>
+                                                  {r.size}cm
+                                                </span>
+                                              ) : null}
+                                              <span className={`text-[10px] font-bold ${
+                                                isSelected ? 'text-emerald-200' : 'text-emerald-600 dark:text-emerald-400'
+                                              }`}>
+                                                Gr. {r.qcGrade || 'A'}
+                                              </span>
+                                            </button>
+
+                                            {/* Eye quick specs preview button on stock chip */}
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setViewingReelDetails(r);
+                                              }}
+                                              className={`px-1.5 py-1.5 border-l transition cursor-pointer flex items-center justify-center ${
+                                                isSelected
+                                                  ? 'border-blue-500/80 text-blue-100 hover:text-white hover:bg-blue-700/40'
+                                                  : 'border-slate-200 dark:border-slate-700 text-slate-400 hover:text-blue-600 hover:bg-slate-50 dark:hover:bg-slate-700'
+                                              }`}
+                                              title="View Quick Reel Specs & QC Details"
+                                            >
+                                              <Eye className="h-3 w-3" />
+                                            </button>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* 5. LIVE PRINTABLE DELIVERY CHALLAN & GATE PASS DOCUMENT PREVIEW */}
+          {selectedReelNos.length > 0 ? (
+            <div className="bg-white dark:bg-slate-900 border-2 border-slate-300 dark:border-slate-700 rounded-3xl p-5 sm:p-7 shadow-xl space-y-5 text-slate-900 dark:text-slate-100 relative overflow-hidden text-left">
+              
+              {/* Paper document top decorative bar */}
+              <div className="absolute top-0 left-0 right-0 h-1.5 bg-primary"></div>
+
+              {/* Challan Document Header */}
+              <div className="border-b-2 border-slate-200 dark:border-slate-800 pb-4 pt-1 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Building2 className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                    <h2 className="text-base sm:text-lg font-black tracking-tight uppercase text-slate-900 dark:text-white">
+                      {COMPANY_CONFIG?.name || 'SAHEB PAPER PVT. LTD.'}
+                    </h2>
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium mt-0.5">
+                    {COMPANY_CONFIG?.address || 'Survey No. 42/1, NH-8A, Morbi-Wankaner Road, Gujarat - 363642'}
+                  </p>
+                </div>
+
+                <div className="text-left sm:text-right">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 text-xs font-black font-mono">
+                    <FileText className="h-3.5 w-3.5" />
+                    <span>{autoSlipNo}</span>
+                  </div>
+                  <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">
+                    DELIVERY CHALLAN &amp; GATE PASS (LIVE PREVIEW)
+                  </div>
+                </div>
+              </div>
+
+              {/* Consignee & Vehicle Information Box */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs font-semibold">
+                <div>
+                  <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block mb-1">
+                    Billed / Consigned To:
+                  </span>
+                  <div className="text-sm font-black text-slate-900 dark:text-white">
+                    {selectedParty ? selectedParty.name : <span className="text-amber-600 font-normal italic">Party not selected yet (Select above)</span>}
+                  </div>
+                  {selectedParty?.address && (
+                    <div className="text-[11px] text-slate-500 truncate mt-0.5">
+                      {selectedParty.address}
+                    </div>
+                  )}
+                </div>
+
+                <div className="md:border-l md:border-slate-200 md:dark:border-slate-700 md:pl-4 space-y-1">
+                  <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block mb-1">
+                    Dispatch &amp; Vehicle Logistics:
+                  </span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">Vehicle / Truck No:</span>
+                    <span className="font-mono font-black text-slate-900 dark:text-white uppercase">
+                      {slipVehicleId || <span className="text-amber-600 font-normal italic">Not specified</span>}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">Dispatch Date:</span>
+                    <span className="font-mono font-bold text-slate-800 dark:text-slate-200">{slipDate}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">Gate Pass Clearance:</span>
+                    <span className="text-[10px] font-extrabold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-md flex items-center gap-1">
+                      <Check className="w-3 h-3 inline-block" />
+                      Gate Verified
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Itemized Selected Reels Table */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                    Loaded Reels Manifest ({selectedReelNos.length} Items)
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedReelNos([]);
+                      playBeep();
+                    }}
+                    className="text-[11px] font-bold text-red-600 hover:text-red-700 dark:text-red-400 cursor-pointer flex items-center gap-1"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                    <span>Clear All ({selectedReelNos.length})</span>
+                  </button>
+                </div>
+
+                <div className="border border-slate-200 dark:border-slate-700 rounded-2xl overflow-x-auto max-h-[340px] overflow-y-auto custom-scrollbar">
+                  <table className="w-full min-w-[620px] text-left text-xs border-collapse">
+                    <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 uppercase text-[10px] font-black tracking-wider z-10 border-b border-slate-200 dark:border-slate-700">
+                      <tr>
+                        <th className="py-2.5 px-3 w-10 text-center">#</th>
+                        <th className="py-2.5 px-3">Reel Number</th>
+                        <th className="py-2.5 px-3">Product Description</th>
+                        <th className="py-2.5 px-3 text-center">GSM</th>
+                        <th className="py-2.5 px-3 text-center">Size (cm)</th>
+                        <th className="py-2.5 px-3 text-center">Ply</th>
+                        <th className="py-2.5 px-3 text-center">Joints</th>
+                        <th className="py-2.5 px-3 text-right">Net Weight</th>
+                        <th className="py-2.5 px-3 text-center w-12">Remove</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-semibold">
+                      {selectedReelNos.map((reelNo, index) => {
+                        const r = availableReels.find(x => x.reelNo === reelNo) || reels.find(x => x.reelNo === reelNo);
+                        const weightVal = r?.weight || 0;
+                        return (
+                          <tr key={reelNo} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition">
+                            <td className="py-2 px-3 text-center text-slate-400 font-mono text-[11px]">{index + 1}</td>
+                            <td className="py-2 px-3 font-mono font-black text-slate-900 dark:text-white">{reelNo}</td>
+                            <td className="py-2 px-3 text-[11px] text-slate-700 dark:text-slate-300">
+                              {r?.product || 'Tissue Paper'}
+                            </td>
+                            <td className="py-2 px-3 text-center font-mono">{r?.gsm || '-'}</td>
+                            <td className="py-2 px-3 text-center font-mono">{r?.size || '-'}</td>
+                            <td className="py-2 px-3 text-center font-mono">{r?.ply || 1}P</td>
+                            <td className="py-2 px-3 text-center text-[11px] text-slate-500">{r?.joint ?? 0}</td>
+                            <td className="py-2 px-3 text-right font-mono font-black text-emerald-600 dark:text-emerald-400">
+                              {weightVal.toLocaleString()} kg
+                            </td>
+                            <td className="py-2 px-3 text-center">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedReelNos(prev => prev.filter(no => no !== reelNo));
+                                  playBeep();
+                                }}
+                                className="p-1 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 cursor-pointer transition"
+                                title="Remove Reel from Challan"
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Product-wise Weight & Reel Count Summary */}
+              {selectedProductSummary.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 p-3 bg-blue-50/50 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-900/40 rounded-2xl">
+                  <span className="text-[10px] font-black uppercase text-blue-700 dark:text-blue-300 tracking-wider mr-1">
+                    Product Summary:
+                  </span>
+                  {selectedProductSummary.map(item => (
+                    <span
+                      key={item.product}
+                      className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold shadow-2xs inline-flex items-center gap-2"
+                    >
+                      <span className="font-extrabold text-slate-900 dark:text-white">{item.product}:</span>
+                      <span className="text-emerald-600 dark:text-emerald-400 font-mono font-black">
+                        {item.weight.toLocaleString()} kg
+                      </span>
+                      <span className="text-[10px] font-mono font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60 px-1.5 py-0.5 rounded-md border border-blue-200 dark:border-blue-800">
+                        {item.count} {item.count === 1 ? 'Reel' : 'Reels'}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Grand Totals & Signature Block */}
+              <div className="border-t-2 border-slate-200 dark:border-slate-800 pt-4 grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+                <div className="p-3.5 sm:p-4 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-2xl flex items-center justify-between shadow-2xs">
+                  <div>
+                    <span className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider block">Total Quantity</span>
+                    <span className="text-lg sm:text-xl font-black font-mono text-slate-900 dark:text-white">
+                      {selectedReelNos.length} <span className="text-xs font-bold text-slate-500 dark:text-slate-400">Reels</span>
+                    </span>
+                  </div>
+                  <div className="h-9 w-px bg-slate-200 dark:bg-slate-700"></div>
+                  <div className="text-right">
+                    <span className="text-[10px] font-black text-slate-500 dark:text-slate-400 uppercase tracking-wider block">Total Net Weight</span>
+                    <div className="text-lg sm:text-xl font-black font-mono text-emerald-600 dark:text-emerald-400">
+                      {totalSelectedWeight.toLocaleString()} <span className="text-xs font-bold text-slate-500 dark:text-slate-400">KG</span>
+                      <span className="text-xs font-extrabold text-blue-600 dark:text-blue-400 ml-1.5">({(totalSelectedWeight / 1000).toFixed(3)} MT)</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 text-center">
+                  <div className="border border-dashed border-slate-300 dark:border-slate-700 rounded-2xl p-2.5">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase block">Driver / Gate Clearance</span>
+                    <span className="text-xs font-black text-slate-800 dark:text-slate-200 mt-1 block">Gate Verified</span>
+                  </div>
+                  <div className="border border-dashed border-slate-300 dark:border-slate-700 rounded-2xl p-2.5">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase block">Authorized Signatory</span>
+                    <span className="text-xs font-black text-slate-800 dark:text-slate-200 mt-1 block">{COMPANY_CONFIG?.name || 'SAHEB PAPER PVT. LTD.'}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Bottom Challan Action Toolbar */}
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const tempDraftSlip: PackingSlip = {
+                      id: `DRAFT-${Date.now()}`,
+                      slipNo: autoSlipNo,
+                      orderNo: slipOrderNo.trim() || undefined,
+                      date: slipDate,
+                      partyId: slipPartyId,
+                      vehicleId: slipVehicleId || 'GJ01EP1234',
+                      reelNos: selectedReelNos,
+                      driverSignature: 'Gate Verified',
+                      receiverSignature: receiverSig || 'Authorized Consignee',
+                      status: 'DRAFT',
+                      dispatchDate: slipDate,
+                    };
+                    setViewingSlip(tempDraftSlip);
+                  }}
+                  className="w-full sm:w-auto px-4 py-2.5 rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-white text-xs font-bold border border-slate-200 dark:border-slate-700 cursor-pointer transition flex items-center justify-center gap-1.5"
+                >
+                  <Printer className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                  <span>Full Printable PDF Preview</span>
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={isViewer}
+                  title={isViewer ? 'Viewer Mode: Confirming dispatch is locked (Read-Only)' : 'Confirm Dispatch & Issue Gate Pass'}
+                  className={`w-full sm:w-auto py-3 px-6 text-xs uppercase tracking-wider flex items-center justify-center gap-2 rounded-2xl font-black transition ${
+                    isViewer
+                      ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed border border-slate-300 dark:border-slate-700 shadow-none'
+                      : 'btn-primary-gradient cursor-pointer shadow-md'
+                  }`}
+                >
+                  {isViewer ? <Lock className="h-4 w-4 text-amber-500" /> : <Truck className="h-4 w-4" />}
+                  <span>{isViewer ? 'Confirm Dispatch & Issue Gate Pass (Locked)' : 'Confirm Dispatch & Issue Gate Pass'}</span>
+                </button>
+              </div>
+
+            </div>
+          ) : (
+            <div className="p-8 text-center bg-slate-50 dark:bg-slate-900/40 border border-dashed border-slate-200 dark:border-slate-700 rounded-3xl space-y-2">
+              <ScanBarcode className="h-8 w-8 text-slate-400 mx-auto" />
+              <h4 className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                No Reels Selected for Challan
+              </h4>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                Scan reels with a barcode gun, use the QR camera, or click on reels above to add them to this delivery challan.
+              </p>
+            </div>
+          )}
+
+        </form>
+      )}
+
+      {/* 3. TAB: Packing Slips & Challans List (Modern Filterable Ledger) */}
+      {activeTab === 'slips_list' && (() => {
+        const timeframeSlips = slips.filter(s => isDateInTimeframe(s.date, selectedDate, timeframe));
+        const timeframeLabel = timeframe === 'day' ? `For Day (${selectedDate})` : timeframe === 'week' ? 'Weekly Window' : timeframe === 'month' ? `Month (${selectedDate.substring(0, 7)})` : 'All-Time';
+        const timeframeDispatched = timeframeSlips.filter(s => s.status !== 'DRAFT').length;
+        const timeframeDrafts = timeframeSlips.filter(s => s.status === 'DRAFT').length;
+        const timeframeLinkedReels = timeframeSlips.reduce((sum, s) => sum + (s.reelNos ? s.reelNos.length : 0), 0);
+
+        return (
+          <div className="space-y-4 text-left">
+            
+            {/* Top KPI Metrics Row */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-white dark:bg-surface-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 shadow-2xs">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">Total Challans</span>
+                <span className="text-xl font-black text-slate-900 dark:text-white font-mono">{timeframeSlips.length}</span>
+                <span className="text-[10px] text-slate-500 block mt-0.5 truncate">{timeframeLabel}</span>
+              </div>
+
+              <div className="bg-white dark:bg-surface-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 shadow-2xs">
+                <span className="text-[10px] font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400 block">Dispatched Slips</span>
+                <span className="text-xl font-black text-emerald-600 dark:text-emerald-400 font-mono">
+                  {timeframeDispatched}
+                </span>
+                <span className="text-[10px] text-slate-500 block mt-0.5">Finalized &amp; Decremented</span>
+              </div>
+
+              <div className="bg-white dark:bg-surface-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 shadow-2xs">
+                <span className="text-[10px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400 block">Pending Drafts</span>
+                <span className="text-xl font-black text-amber-600 dark:text-amber-400 font-mono">
+                  {timeframeDrafts}
+                </span>
+                <span className="text-[10px] text-slate-500 block mt-0.5">Awaiting Confirmation</span>
+              </div>
+
+              <div className="bg-white dark:bg-surface-dark border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 shadow-2xs">
+                <span className="text-[10px] font-black uppercase tracking-wider text-blue-600 dark:text-blue-400 block">Total Linked Reels</span>
+                <span className="text-xl font-black text-blue-600 dark:text-blue-400 font-mono">
+                  {timeframeLinkedReels}
+                </span>
+                <span className="text-[10px] text-slate-500 block mt-0.5">Dispatched Reel Units</span>
+              </div>
+            </div>
+
+            {/* Filter Toolbar Container */}
+          <div className="bg-white dark:bg-surface-dark border border-slate-200 dark:border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xs space-y-3">
+            
+            {/* Header Title + Fast Search */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div>
+                <h3 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
+                  Registered Delivery Challans
+                </h3>
+                <p className="text-[11px] text-slate-500 font-semibold">
+                  Showing {filteredSlips.length} of {slips.length} total slips
+                </p>
+              </div>
+
+              {/* Actions & Search Bar */}
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <div className="relative w-full sm:w-72">
+                  <Search className="h-3.5 w-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={slipSearchQuery}
+                    onChange={e => setSlipSearchQuery(e.target.value)}
+                    placeholder="Search Challan No, Customer, Vehicle, Date..."
+                    className="w-full py-2 pl-9 pr-7 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold focus:outline-none dark:text-white"
+                  />
+                  {slipSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSlipSearchQuery('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Filter Row: Status Chips & Customer Dropdown */}
+            <div className="flex flex-wrap items-center justify-between gap-2.5 pt-0.5">
+              
+              {/* Status Chips */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider mr-1">
+                  Status:
+                </span>
+                
+                <button
+                  type="button"
+                  onClick={() => setSlipStatusFilter('ALL')}
+                  className={`px-3 py-1 rounded-full text-xs font-bold cursor-pointer transition ${
+                    slipStatusFilter === 'ALL'
+                      ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 shadow-xs'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
+                  }`}
+                >
+                  All ({slips.length})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSlipStatusFilter('CONFIRMED')}
+                  className={`px-3 py-1 rounded-full text-xs font-bold cursor-pointer transition flex items-center gap-1.5 ${
+                    slipStatusFilter === 'CONFIRMED'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
+                  }`}
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+                  <span>Dispatched ({slips.filter(s => s.status !== 'DRAFT').length})</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSlipStatusFilter('DRAFT')}
+                  className={`px-3 py-1 rounded-full text-xs font-bold cursor-pointer transition flex items-center gap-1.5 ${
+                    slipStatusFilter === 'DRAFT'
+                      ? 'bg-amber-600 text-white shadow-xs'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
+                  }`}
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-400"></span>
+                  <span>Drafts ({slips.filter(s => s.status === 'DRAFT').length})</span>
+                </button>
+              </div>
+
+              {/* Customer / Party Dropdown Filter */}
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Party:</span>
+                <select
+                  value={slipPartyFilter}
+                  onChange={e => setSlipPartyFilter(e.target.value)}
+                  className="py-1 px-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-800 dark:text-white focus:outline-none cursor-pointer"
+                >
+                  <option value="ALL">All Parties ({activeParties.length})</option>
+                  {activeParties.map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+
+                {(slipStatusFilter !== 'ALL' || slipPartyFilter !== 'ALL' || slipSearchQuery) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSlipStatusFilter('ALL');
+                      setSlipPartyFilter('ALL');
+                      setSlipSearchQuery('');
+                    }}
+                    className="px-2.5 py-1 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1"
+                  >
+                    <X className="h-3 w-3" />
+                    <span>Reset</span>
+                  </button>
+                )}
+              </div>
+
+            </div>
+
+            {/* Table / Empty state */}
+            {filteredSlips.length === 0 ? (
+              <div className="py-12 text-center space-y-2">
+                <FileText className="h-8 w-8 text-slate-300 dark:text-slate-600 mx-auto" />
+                <p className="text-xs font-bold text-slate-500">No packing slips match your current filter.</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSlipStatusFilter('ALL');
+                    setSlipPartyFilter('ALL');
+                    setSlipSearchQuery('');
+                  }}
+                  className="px-3 py-1 bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-300 rounded-lg text-xs font-bold cursor-pointer"
+                >
+                  Clear Filters
+                </button>
+              </div>
+            ) : (
+              <div>
+                {/* Desktop/Tablet High Density Table */}
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-100 dark:border-slate-800 text-[10px] font-black uppercase tracking-wider text-slate-400 bg-slate-50/50 dark:bg-slate-900/30">
+                        <th className="py-3 px-3">Challan Number</th>
+                        <th className="py-3 px-3">Order No</th>
+                        <th className="py-3 px-3">Date</th>
+                        <th className="py-3 px-3">Party / Customer</th>
+                        <th className="py-3 px-3">Vehicle No</th>
+                        <th className="py-3 px-3">Linked Reels</th>
+                        <th className="py-3 px-3">Status</th>
+                        <th className="py-3 px-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                      {filteredSlips
+                        .slice()
+                        .sort((a, b) => {
+                          const dateComp = (b.date || '').localeCompare(a.date || '');
+                          if (dateComp !== 0) return dateComp;
+                          return (b.slipNo || '').localeCompare(a.slipNo || '', undefined, { numeric: true });
+                        })
+                        .map(slip => {
+                          const partyObj = parties.find(p => p.id === slip.partyId);
+                          const vehicleObj = vehicles.find(v => v.id === slip.vehicleId || v.vehicleNo === slip.vehicleId);
+                          const vehicleDisplay = vehicleObj ? vehicleObj.vehicleNo : (slip.vehicleId || 'N/A');
+                          
+                          // Calculate Total Weight for slip
+                          const linkedReels = reels.filter(r => slip.reelNos.includes(r.reelNo));
+                          const totalWeightKg = linkedReels.reduce((sum, r) => sum + (r.weight || 0), 0);
+
+                          return (
+                            <tr key={slip.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/30 transition">
+                              <td className="py-3 px-3">
+                                <button
+                                  type="button"
+                                  onClick={() => setViewingSlip(slip)}
+                                  className="font-mono font-bold text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 hover:underline cursor-pointer flex items-center gap-1.5"
+                                >
+                                  <FileText className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                                  <span>{slip.slipNo}</span>
+                                </button>
+                              </td>
+                              <td className="py-3 px-3">
+                                {slip.orderNo ? (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 text-[11px] font-mono font-bold border border-blue-200/50 dark:border-blue-800/50">
+                                    {slip.orderNo}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400 font-normal text-[11px]">—</span>
+                                )}
+                              </td>
+                              <td className="py-3 px-3 font-semibold text-slate-600 dark:text-slate-400">{slip.date}</td>
+                              <td className="py-3 px-3 font-bold text-slate-900 dark:text-white">
+                                {partyObj?.name || 'Walk-in Customer'}
+                              </td>
+                              <td className="py-3 px-3 font-mono font-bold text-slate-700 dark:text-slate-300">
+                                <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[11px] font-mono">
+                                  {vehicleDisplay}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3">
+                                <span className="font-bold text-slate-800 dark:text-slate-200">
+                                  {slip.reelNos.length} reels
+                                </span>
+                                {totalWeightKg > 0 && (
+                                  <span className="text-[10px] text-slate-400 font-mono ml-1.5">
+                                    ({totalWeightKg.toLocaleString()} kg)
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 px-3">
+                                <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                                  slip.status === 'DRAFT'
+                                    ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
+                                    : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300'
+                                }`}>
+                                  <span className={`h-1.5 w-1.5 rounded-full ${slip.status === 'DRAFT' ? 'bg-amber-500' : 'bg-emerald-500'}`}></span>
+                                  <span>{slip.status === 'DRAFT' ? 'Draft Gate Pass' : 'Dispatched'}</span>
+                                </span>
+                              </td>
+                              <td className="py-3 px-3 text-right">
+                                  <div className="flex items-center justify-end gap-1.5 relative">
+                                    {/* 1. Preview Receipt Icon Only */}
+                                    <button
+                                      type="button"
+                                      onClick={() => setViewingSlip(slip)}
+                                      title="Preview Receipt & Gate Pass"
+                                      className="p-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 dark:bg-blue-950/50 dark:hover:bg-blue-900/60 dark:text-blue-300 rounded-lg transition cursor-pointer border border-blue-200/60 dark:border-blue-800/60 flex items-center justify-center shadow-2xs"
+                                    >
+                                      <Eye className="h-3.5 w-3.5" />
+                                    </button>
+
+                                    {slip.status === 'DRAFT' ? (
+                                      <button
+                                        type="button"
+                                        disabled={isViewer}
+                                        onClick={() => handleConfirmDispatch(slip.id)}
+                                        title={isViewer ? 'Viewer Mode: Dispatch confirmation is locked (Read-Only)' : 'Confirm Dispatch'}
+                                        className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition flex items-center gap-1 ${
+                                          isViewer
+                                            ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed border border-slate-300 dark:border-slate-700 shadow-none'
+                                            : 'bg-[#008163] hover:bg-[#006e54] text-white shadow-xs shadow-[#008163]/25 cursor-pointer'
+                                        }`}
+                                      >
+                                        {isViewer ? <Lock className="h-3 w-3 text-amber-500" /> : <Check className="h-3 w-3" />}
+                                        <span>Confirm</span>
+                                      </button>
+                                    ) : (
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            if (isViewer) return;
+                                            handleExportExcel(slip);
+                                          }}
+                                          disabled={isViewer}
+                                          title={isViewer ? "Excel export locked for Viewer (Read-Only)" : "Export Excel (.xlsx)"}
+                                          className={`p-1.5 rounded-lg border flex items-center justify-center transition ${
+                                            isViewer
+                                              ? 'opacity-50 cursor-not-allowed text-slate-400 border-slate-200 dark:border-slate-800'
+                                              : 'text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/80 cursor-pointer'
+                                          }`}
+                                        >
+                                          {isViewer ? <Lock className="h-3.5 w-3.5 text-amber-500" /> : <FileSpreadsheet className="h-3.5 w-3.5" />}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            if (isViewer) return;
+                                            handlePrintSlip(slip);
+                                          }}
+                                          disabled={isViewer}
+                                          title={isViewer ? "Printing locked for Viewer (Read-Only)" : "Print Official Dispatch Receipt & Gate Pass"}
+                                          className={`p-1.5 rounded-lg border flex items-center justify-center transition ${
+                                            isViewer
+                                              ? 'opacity-50 cursor-not-allowed text-slate-400 border-slate-200 dark:border-slate-800'
+                                              : 'text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/30 border-blue-200 dark:border-blue-900/80 cursor-pointer'
+                                          }`}
+                                        >
+                                          {isViewer ? <Lock className="h-3.5 w-3.5 text-amber-500" /> : <Printer className="h-3.5 w-3.5" />}
+                                        </button>
+                                      </>
+                                    )}
+
+                                    {/* 2. Three-Dots Menu Button */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (openMenuSlipId === slip.id) {
+                                          setOpenMenuSlipId(null);
+                                          setMenuPos(null);
+                                        } else {
+                                          const rect = e.currentTarget.getBoundingClientRect();
+                                          const spaceBelow = window.innerHeight - rect.bottom;
+                                          const openUp = spaceBelow < 120;
+                                          setMenuPos({
+                                            top: openUp ? rect.top - 82 : rect.bottom + 6,
+                                            right: Math.max(12, window.innerWidth - rect.right),
+                                          });
+                                          setOpenMenuSlipId(slip.id);
+                                        }
+                                      }}
+                                      title="Challan Actions"
+                                      className={`p-1.5 rounded-lg border transition cursor-pointer flex items-center justify-center ${
+                                        openMenuSlipId === slip.id
+                                          ? 'bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-white border-slate-300 dark:border-slate-600 shadow-xs'
+                                          : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 border-slate-200 dark:border-slate-700'
+                                      }`}
+                                    >
+                                      <MoreVertical className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Mobile Responsive Cards */}
+                <div className="block md:hidden space-y-2.5">
+                  {filteredSlips
+                    .slice()
+                    .sort((a, b) => {
+                      const dateComp = (b.date || '').localeCompare(a.date || '');
+                      if (dateComp !== 0) return dateComp;
+                      return (b.slipNo || '').localeCompare(a.slipNo || '', undefined, { numeric: true });
+                    })
+                    .map(slip => {
+                      const partyObj = parties.find(p => p.id === slip.partyId);
+                      const vehicleObj = vehicles.find(v => v.id === slip.vehicleId || v.vehicleNo === slip.vehicleId);
+                      const vehicleDisplay = vehicleObj ? vehicleObj.vehicleNo : (slip.vehicleId || 'N/A');
+                      const linkedReels = reels.filter(r => slip.reelNos.includes(r.reelNo));
+                      const totalWeightKg = linkedReels.reduce((sum, r) => sum + (r.weight || 0), 0);
+
+                      return (
+                        <div
+                          key={slip.id}
+                          className="p-3.5 bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 rounded-2xl space-y-2.5 text-xs text-left shadow-2xs"
+                        >
+                          <div className="flex justify-between items-center border-b pb-2 dark:border-slate-800">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold text-blue-600 dark:text-blue-400 font-mono text-xs">
+                                {slip.slipNo}
+                              </span>
+                              {slip.orderNo && (
+                                <span className="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 font-mono text-[9px] font-bold border border-blue-200/50 dark:border-blue-800/50">
+                                  {slip.orderNo}
+                                </span>
+                              )}
+                            </div>
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${
+                              slip.status === 'DRAFT'
+                                ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
+                                : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300'
+                            }`}>
+                              <span className={`h-1.5 w-1.5 rounded-full ${slip.status === 'DRAFT' ? 'bg-amber-500' : 'bg-emerald-500'}`}></span>
+                              <span>{slip.status}</span>
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 text-[11px]">
+                            <div>
+                              <span className="font-bold text-slate-400 block uppercase text-[8px]">Party</span>
+                              <span className="font-bold text-slate-900 dark:text-white truncate block">{partyObj?.name || 'Walk-in'}</span>
+                            </div>
+                            <div>
+                              <span className="font-bold text-slate-400 block uppercase text-[8px]">Vehicle</span>
+                              <span className="font-mono font-bold text-slate-700 dark:text-slate-300">{vehicleDisplay}</span>
+                            </div>
+                            <div>
+                              <span className="font-bold text-slate-400 block uppercase text-[8px]">Date</span>
+                              <span className="font-semibold text-slate-600 dark:text-slate-400">{slip.date}</span>
+                            </div>
+                            <div>
+                              <span className="font-bold text-slate-400 block uppercase text-[8px]">Reels &amp; Weight</span>
+                              <span className="font-bold text-slate-800 dark:text-white">{slip.reelNos.length} reels ({totalWeightKg} kg)</span>
+                            </div>
+                          </div>
+
+                          <div className="pt-2 border-t dark:border-slate-800 flex items-center justify-end gap-1.5 relative">
+                            {/* Preview Receipt Icon */}
+                            <button
+                              type="button"
+                              onClick={() => setViewingSlip(slip)}
+                              title="Preview Receipt & Gate Pass"
+                              className="p-1.5 bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-300 rounded-xl border border-blue-200/60 dark:border-blue-800/60 flex items-center justify-center shadow-2xs"
+                            >
+                              <Eye className="h-3.5 w-3.5" />
+                            </button>
+
+                            {slip.status === 'DRAFT' ? (
+                              <button
+                                type="button"
+                                disabled={isViewer}
+                                onClick={() => handleConfirmDispatch(slip.id)}
+                                title={isViewer ? 'Viewer Mode: Dispatch confirmation is locked (Read-Only)' : 'Confirm Dispatch'}
+                                className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition flex items-center gap-1 ${
+                                  isViewer
+                                    ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed border border-slate-300 dark:border-slate-700 shadow-none'
+                                    : 'bg-[#008163] hover:bg-[#006e54] text-white shadow-xs shadow-[#008163]/25 flex items-center gap-1 cursor-pointer'
+                                }`}
+                              >
+                                {isViewer ? <Lock className="h-3 w-3 text-amber-500" /> : <Check className="h-3 w-3" />}
+                                <span>Confirm</span>
+                              </button>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (isViewer) return;
+                                    handleExportExcel(slip);
+                                  }}
+                                  disabled={isViewer}
+                                  title={isViewer ? "Excel export locked for Viewer (Read-Only)" : "Export Excel (.xlsx)"}
+                                  className={`p-1.5 rounded-lg border flex items-center justify-center transition ${
+                                    isViewer
+                                      ? 'opacity-50 cursor-not-allowed text-slate-400 border-slate-200 dark:border-slate-800'
+                                      : 'text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800 cursor-pointer'
+                                  }`}
+                                >
+                                  {isViewer ? <Lock className="h-3.5 w-3.5 text-amber-500" /> : <FileSpreadsheet className="h-3.5 w-3.5" />}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (isViewer) return;
+                                    handlePrintSlip(slip);
+                                  }}
+                                  disabled={isViewer}
+                                  title={isViewer ? "Printing locked for Viewer (Read-Only)" : "Print Official Dispatch Receipt & Gate Pass"}
+                                  className={`p-1.5 rounded-lg border flex items-center justify-center transition ${
+                                    isViewer
+                                      ? 'opacity-50 cursor-not-allowed text-slate-400 border-slate-200 dark:border-slate-800'
+                                      : 'text-blue-600 border-blue-200 dark:border-blue-800 cursor-pointer'
+                                  }`}
+                                >
+                                  {isViewer ? <Lock className="h-3.5 w-3.5 text-amber-500" /> : <Printer className="h-3.5 w-3.5" />}
+                                </button>
+                              </>
+                            )}
+
+                            {/* Three-Dots Menu Button */}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (openMenuSlipId === slip.id) {
+                                  setOpenMenuSlipId(null);
+                                  setMenuPos(null);
+                                } else {
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  const spaceBelow = window.innerHeight - rect.bottom;
+                                  const openUp = spaceBelow < 120;
+                                  setMenuPos({
+                                    top: openUp ? rect.top - 82 : rect.bottom + 6,
+                                    right: Math.max(12, window.innerWidth - rect.right),
+                                  });
+                                  setOpenMenuSlipId(slip.id);
+                                }
+                              }}
+                              title="Challan Actions"
+                              className="p-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 flex items-center justify-center"
+                            >
+                              <MoreVertical className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+
+                {/* Universal Portal Floating Dropdown Menu */}
+                {openMenuSlipId && menuPos && (() => {
+                  const currentSlip = slips.find(s => s.id === openMenuSlipId);
+                  if (!currentSlip) return null;
+
+                  return createPortal(
+                    <>
+                      {/* Click Outside Overlay */}
+                      <div
+                        className="fixed inset-0 z-[9998]"
+                        onClick={() => {
+                          setOpenMenuSlipId(null);
+                          setMenuPos(null);
+                        }}
+                      />
+                      {/* Floating Dropdown - Exactly 2 Actions: Edit Challan & Delete Challan */}
+                      <div
+                        style={{
+                          position: 'fixed',
+                          top: `${menuPos.top}px`,
+                          right: `${menuPos.right}px`,
+                        }}
+                        className="w-38 bg-white dark:bg-[#131d38] border border-slate-200 dark:border-[#203058] rounded-2xl shadow-2xl z-[9999] p-1.5 space-y-1 animate-in fade-in zoom-in-95 text-left select-none font-sans"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          disabled={isViewer}
+                          onClick={() => {
+                            if (isViewer) return;
+                            setOpenMenuSlipId(null);
+                            setMenuPos(null);
+                            handlePrintSlip(currentSlip);
+                          }}
+                          className={`w-full px-3 py-2 text-left text-xs font-bold rounded-xl transition flex items-center gap-2 ${
+                            isViewer
+                              ? 'opacity-50 cursor-not-allowed text-slate-400'
+                              : 'text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950/40 cursor-pointer'
+                          }`}
+                          title={isViewer ? "Printing locked for Viewer (Read-Only)" : undefined}
+                        >
+                          {isViewer ? <Lock className="h-3.5 w-3.5 text-amber-500" /> : <Printer className="h-3.5 w-3.5 text-blue-500" />}
+                          <span>{isViewer ? 'Print Receipt (Locked)' : 'Print Receipt & Gate Pass'}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOpenMenuSlipId(null);
+                            setMenuPos(null);
+                            handleOpenEditSlip(currentSlip);
+                          }}
+                          className="w-full px-3 py-2 text-left text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-amber-50 dark:hover:bg-amber-950/40 hover:text-amber-700 dark:hover:text-amber-300 rounded-xl transition cursor-pointer flex items-center gap-2"
+                        >
+                          <Pencil className="h-3.5 w-3.5 text-amber-500" />
+                          <span>Edit Challan</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOpenMenuSlipId(null);
+                            setMenuPos(null);
+                            handleDeleteSlip(currentSlip);
+                          }}
+                          className="w-full px-3 py-2 text-left text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-xl transition cursor-pointer flex items-center gap-2"
+                        >
+                          <Trash2 className="h-3.5 w-3.5 text-red-500" />
+                          <span>Delete Challan</span>
+                        </button>
+                      </div>
+                    </>,
+                    document.body
+                  );
+                })()}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    })()}
+
+      {/* 5. EDIT DELIVERY CHALLAN MODAL */}
+      {editingSlip && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white dark:bg-surface-dark border border-slate-200 dark:border-slate-800 rounded-3xl max-w-2xl w-full p-6 shadow-2xl space-y-5 text-left max-h-[90vh] overflow-y-auto animate-in zoom-in-95">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-2xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400">
+                  <Pencil className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900 dark:text-white uppercase tracking-wider">
+                    Edit Delivery Challan
+                  </h3>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="font-mono font-bold text-xs text-blue-600 dark:text-blue-400">
+                      {editingSlip.slipNo}
+                    </span>
+                    <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${
+                      editingSlip.status === 'DRAFT'
+                        ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300'
+                        : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300'
+                    }`}>
+                      {editingSlip.status === 'DRAFT' ? 'Draft Gate Pass' : 'Dispatched'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingSlip(null)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {editModalError && (
+              <div className="p-3 bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 text-xs rounded-xl border border-red-200 dark:border-red-800 font-bold flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                <span>{editModalError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveEditSlip} className="space-y-4">
+              {/* Form Fields: Date, Customer, Vehicle, Order No */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                <div>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">
+                    Challan Date
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={editDate}
+                    onChange={e => setEditDate(e.target.value)}
+                    className="w-full p-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono font-bold dark:text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">
+                    Party / Customer
+                  </label>
+                  <select
+                    required
+                    value={editPartyId}
+                    onChange={e => setEditPartyId(e.target.value)}
+                    className="w-full p-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold dark:text-white focus:outline-none focus:ring-2 focus:ring-primary cursor-pointer"
+                  >
+                    <option value="">Select Customer...</option>
+                    {parties.filter(p => p.active !== false || p.id === editPartyId).map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">
+                    Order No (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={editOrderNo}
+                    onChange={e => setEditOrderNo(e.target.value.toUpperCase())}
+                    placeholder="e.g. ORD-2609-001"
+                    className="w-full p-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono font-bold dark:text-white focus:outline-none focus:ring-2 focus:ring-primary uppercase placeholder:normal-case placeholder:font-sans"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">
+                    Vehicle Number
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editVehicleId}
+                    onChange={e => setEditVehicleId(e.target.value.toUpperCase())}
+                    placeholder="e.g. MH-04-ZZ-9012"
+                    className="w-full p-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono font-bold dark:text-white focus:outline-none focus:ring-2 focus:ring-primary uppercase"
+                  />
+                </div>
+              </div>
+
+              {/* Linked Reels Section */}
+              <div className="space-y-2.5 border-t border-slate-100 dark:border-slate-800 pt-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">
+                      Linked Reels in Challan
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      Total: <strong className="text-slate-900 dark:text-white">{editReelNos.length} reels</strong> ({reels.filter(r => editReelNos.includes(r.reelNo)).reduce((sum, r) => sum + (r.weight || 0), 0).toLocaleString()} kg)
+                    </p>
+                  </div>
+                </div>
+
+                {/* Add Reel Input & Stock Picker trigger inside Modal */}
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      type="text"
+                      value={editReelInput}
+                      onChange={e => setEditReelInput(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const val = editReelInput.trim();
+                          if (!val) {
+                            handleOpenEditStockPicker();
+                            return;
+                          }
+                          const found = reels.find(r => r.reelNo.toLowerCase() === val.toLowerCase());
+                          if (found) {
+                            handleAddReelToEdit(found.reelNo);
+                          } else {
+                            handleOpenEditStockPicker();
+                          }
+                        }
+                      }}
+                      placeholder="Type or scan reel number (e.g. 260500586)..."
+                      className="w-full py-2.5 px-3.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono font-bold dark:text-white focus:outline-none focus:ring-2 focus:ring-[#008163]"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const val = editReelInput.trim();
+                      if (val) {
+                        const found = reels.find(r => r.reelNo.toLowerCase() === val.toLowerCase());
+                        if (found) {
+                          handleAddReelToEdit(found.reelNo);
+                          return;
+                        }
+                      }
+                      handleOpenEditStockPicker();
+                    }}
+                    className="px-4 py-2.5 bg-[#008163] hover:bg-[#006e54] text-white rounded-xl text-xs font-black uppercase tracking-wider shrink-0 cursor-pointer shadow-md shadow-[#008163]/25 flex items-center justify-center gap-1.5 transition"
+                  >
+                    <PackageCheck className="h-4 w-4" />
+                    <span>+ Add Reel (From Stock)</span>
+                  </button>
+                </div>
+
+                {/* List of currently linked reels */}
+                <div className="border border-slate-200 dark:border-slate-800 rounded-2xl max-h-56 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+                  {editReelNos.length === 0 ? (
+                    <div className="py-6 text-center text-xs text-slate-400 font-medium space-y-2">
+                      <p>No reels currently linked to this challan.</p>
+                      <button
+                        type="button"
+                        onClick={handleOpenEditStockPicker}
+                        className="px-3 py-1.5 bg-[#008163]/10 hover:bg-[#008163]/20 text-[#008163] dark:text-emerald-400 rounded-lg text-xs font-bold cursor-pointer transition inline-flex items-center gap-1"
+                      >
+                        <PackageCheck className="h-3.5 w-3.5" />
+                        <span>Open In-Stock Reels Picker</span>
+                      </button>
+                    </div>
+                  ) : (
+                    editReelNos.map(rNo => {
+                      const reelObj = reels.find(r => r.reelNo === rNo);
+                      return (
+                        <div key={rNo} className="p-2.5 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-900/50 transition text-xs">
+                          <div className="flex items-center gap-3">
+                            <span className="font-mono font-black text-slate-900 dark:text-white">{rNo}</span>
+                            {reelObj && (
+                              <span className="text-[11px] text-slate-500 font-semibold">
+                                {reelObj.product} &bull; {reelObj.gsm} GSM &bull; {reelObj.size} mm &bull; <strong className="text-emerald-600 dark:text-emerald-400 font-mono">{reelObj.weight} kg</strong>
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveReelFromEdit(rNo)}
+                            className="p-1.5 rounded-lg text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30 transition cursor-pointer"
+                            title="Remove reel from challan"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setEditingSlip(null)}
+                  className="px-5 py-2.5 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold rounded-xl text-xs transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isViewer}
+                  title={isViewer ? 'Viewer Mode: Saving challan changes is locked (Read-Only)' : 'Save Challan Changes'}
+                  className={`px-6 py-2.5 font-black rounded-xl text-xs uppercase tracking-wider transition flex items-center gap-1.5 ${
+                    isViewer
+                      ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed border border-slate-300 dark:border-slate-700 shadow-none'
+                      : 'bg-[#008163] hover:bg-[#006e54] text-white shadow-md shadow-[#008163]/25 cursor-pointer'
+                  }`}
+                >
+                  {isViewer ? <Lock className="h-4 w-4 text-amber-500" /> : <Check className="h-4 w-4" />}
+                  <span>{isViewer ? 'Save Challan Changes (Locked)' : 'Save Challan Changes'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 6. IN-STOCK REELS SELECTION MODAL (POPUP WINDOW - EXACT IMAGE 2 RICH CHIP / PILL FILTERS) */}
+      {isEditStockPickerOpen && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-md animate-in fade-in">
+          <div className="bg-white dark:bg-surface-dark border border-slate-200 dark:border-slate-800 rounded-3xl max-w-5xl w-full p-4 sm:p-6 shadow-2xl space-y-3.5 sm:space-y-4 text-left max-h-[94vh] flex flex-col animate-in zoom-in-95">
+            {/* Header: Title, Tally, Search & View Switcher */}
+            <div className="flex items-start sm:items-center justify-between gap-2.5 border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider">
+                    Warehouse Stock Reels
+                  </h3>
+                  <span className="px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-300 text-[11px] font-black font-mono">
+                    {editPickerSelectedNos.length} Selected ({reels.filter(r => editPickerSelectedNos.includes(r.reelNo)).reduce((s, r) => s + (r.weight || 0), 0).toLocaleString()} kg)
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 font-semibold">
+                  Showing {filteredAvailableReelsForEdit.length} of {availableReelsForEdit.length} available reels
+                </p>
+              </div>
+
+              {/* Right Side Search Bar (Desktop) & Layout Switcher & Close */}
+              <div className="flex items-center gap-2 shrink-0">
+                {/* Desktop Search Bar */}
+                <div className="relative w-full sm:w-56 hidden sm:block">
+                  <Search className="h-3.5 w-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={editPickerSearch}
+                    onChange={e => setEditPickerSearch(e.target.value)}
+                    placeholder="Search No, GSM, Size..."
+                    className="w-full py-1.5 pl-8 pr-7 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold focus:outline-none dark:text-white"
+                  />
+                  {editPickerSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setEditPickerSearch('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+
+                {/* View Switcher: Grid vs Table (Compact) */}
+                <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-900 p-1 rounded-xl shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setEditPickerViewMode('grid')}
+                    className={`p-1.5 rounded-lg transition cursor-pointer ${
+                      editPickerViewMode === 'grid'
+                        ? 'bg-white dark:bg-slate-800 text-blue-600 shadow-xs'
+                        : 'text-slate-500 hover:text-slate-800 dark:hover:text-white'
+                    }`}
+                    title="Card Grid View"
+                  >
+                    <LayoutGrid className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditPickerViewMode('table')}
+                    className={`p-1.5 rounded-lg transition cursor-pointer ${
+                      editPickerViewMode === 'table'
+                        ? 'bg-white dark:bg-slate-800 text-blue-600 shadow-xs'
+                        : 'text-slate-500 hover:text-slate-800 dark:hover:text-white'
+                    }`}
+                    title="Compact Table View"
+                  >
+                    <List className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsEditStockPickerOpen(false)}
+                  className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer ml-1"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* MOBILE ONLY: Unified Search + Scan Control & Compact Add Reel Action */}
+            <div className="space-y-2 sm:hidden">
+              <div className="relative w-full">
+                <Search className="h-4 w-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={editPickerSearch}
+                  onChange={e => {
+                    setEditPickerSearch(e.target.value);
+                    setEditPickerBarcodeInput(e.target.value);
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      handlePickerBarcodeSubmit(e, editPickerSearch);
+                    }
+                  }}
+                  placeholder="Search / Scan Reel No..."
+                  className="w-full py-2.5 pl-9 pr-14 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold focus:outline-none dark:text-white"
+                />
+                <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+                  {editPickerSearch && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditPickerSearch('');
+                        setEditPickerBarcodeInput('');
+                      }}
+                      className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                  <ScanBarcode className="h-4 w-4 text-slate-400" />
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => handlePickerBarcodeSubmit(undefined, editPickerSearch || editPickerBarcodeInput)}
+                className="w-full py-2.5 bg-[#008163] hover:bg-[#006e54] text-white rounded-xl text-xs font-black uppercase tracking-wider cursor-pointer shadow-sm flex items-center justify-center gap-1.5 active:scale-[0.98] transition"
+              >
+                <Plus className="h-4 w-4" />
+                <span>+ Add Reel</span>
+              </button>
+            </div>
+
+            {/* DESKTOP ONLY: Rapid Barcode Gun / Keyboard Input Bar */}
+            <div className="hidden sm:flex gap-1.5 relative">
+              <div className="relative w-full">
+                <ScanBarcode className="h-4 w-4 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={editPickerBarcodeInput}
+                  onChange={e => setEditPickerBarcodeInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      handlePickerBarcodeSubmit(e);
+                    }
+                  }}
+                  placeholder="Scan / Type Reel Number (e.g. 1048)..."
+                  className="w-full py-2 pl-8 pr-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold focus:outline-none dark:text-white font-mono placeholder:font-sans placeholder:font-normal"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => handlePickerBarcodeSubmit()}
+                className="px-4 py-2 bg-[#008163] hover:bg-[#006e54] text-white rounded-xl text-xs font-black uppercase tracking-wider shrink-0 cursor-pointer shadow-sm flex items-center gap-1"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>+ Add Reel</span>
+              </button>
+            </div>
+
+            {/* Batch Selection & Filter Section */}
+            <div className="space-y-2 pt-1 border-t border-slate-100 dark:border-slate-800">
+              
+              {/* MOBILE ONLY: Clean Batch Selection Area */}
+              <div className="space-y-2 sm:hidden">
+                <div className="text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                  BATCH SELECT
+                </div>
+                
+                <button
+                  type="button"
+                  onClick={() => handleSelectAllPickerReels(filteredAvailableReelsForEdit)}
+                  className="w-full py-2 px-3 rounded-xl bg-blue-50 dark:bg-blue-950/50 hover:bg-blue-100 text-blue-700 dark:text-blue-300 text-xs font-extrabold border border-blue-200 dark:border-blue-800 cursor-pointer transition flex items-center justify-center gap-1.5"
+                >
+                  <CheckSquare className="h-3.5 w-3.5" />
+                  <span>Select All Filtered ({filteredAvailableReelsForEdit.length})</span>
+                </button>
+
+                <div className="grid grid-cols-3 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleSelectPickerTopN(5, filteredAvailableReelsForEdit)}
+                    className="py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 text-xs font-extrabold cursor-pointer transition text-center"
+                  >
+                    + 5 Reels
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectPickerTopN(10, filteredAvailableReelsForEdit)}
+                    className="py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 text-xs font-extrabold cursor-pointer transition text-center"
+                  >
+                    + 10 Reels
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectPickerTopN(20, filteredAvailableReelsForEdit)}
+                    className="py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 text-xs font-extrabold cursor-pointer transition text-center"
+                  >
+                    + 20 Reels
+                  </button>
+                </div>
+
+                {editPickerSelectedNos.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleDeselectAllPickerReels}
+                    className="w-full py-1.5 px-3 rounded-xl bg-red-50 dark:bg-red-950/40 hover:bg-red-100 text-red-600 dark:text-red-400 text-xs font-extrabold border border-red-200 dark:border-red-800 cursor-pointer transition flex items-center justify-center gap-1"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    <span>Clear Selection ({editPickerSelectedNos.length})</span>
+                  </button>
+                )}
+              </div>
+
+              {/* DESKTOP ONLY: Quick 1-Click Batch Actions */}
+              <div className="hidden sm:flex flex-wrap items-center gap-1.5">
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider mr-1">
+                  Batch Select:
+                </span>
+                
+                <button
+                  type="button"
+                  onClick={() => handleSelectAllPickerReels(filteredAvailableReelsForEdit)}
+                  className="px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/50 hover:bg-blue-100 text-blue-700 dark:text-blue-300 text-xs font-extrabold border border-blue-200 dark:border-blue-800 cursor-pointer transition flex items-center gap-1"
+                >
+                  <CheckSquare className="h-3 w-3" />
+                  <span>Select All Filtered ({filteredAvailableReelsForEdit.length})</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSelectPickerTopN(5, filteredAvailableReelsForEdit)}
+                  className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 text-xs font-extrabold cursor-pointer transition"
+                >
+                  + 5 Reels
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSelectPickerTopN(10, filteredAvailableReelsForEdit)}
+                  className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 text-xs font-extrabold cursor-pointer transition"
+                >
+                  + 10 Reels
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSelectPickerTopN(20, filteredAvailableReelsForEdit)}
+                  className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 text-xs font-extrabold cursor-pointer transition"
+                >
+                  + 20 Reels
+                </button>
+
+                {editPickerSelectedNos.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleDeselectAllPickerReels}
+                    className="px-2.5 py-1 rounded-lg bg-red-50 dark:bg-red-950/40 hover:bg-red-100 text-red-600 dark:text-red-400 text-xs font-extrabold border border-red-200 dark:border-red-800 cursor-pointer transition ml-auto flex items-center gap-1"
+                  >
+                    <X className="h-3 w-3" />
+                    <span>Clear Selection</span>
+                  </button>
+                )}
+              </div>
+
+              {/* DESKTOP ONLY: Row B - Product & Grade Filter Chips (HIDDEN ON MOBILE) */}
+              <div className="hidden sm:flex flex-wrap items-center gap-1.5 pt-0.5">
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider mr-1">
+                  Product:
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => setEditPickerProductFilter('ALL')}
+                  className={`px-2.5 py-0.5 rounded-full text-xs font-bold cursor-pointer transition ${
+                    editPickerProductFilter === 'ALL'
+                      ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
+                  }`}
+                >
+                  All Products ({availableReelsForEdit.length})
+                </button>
+
+                {editPickerUniqueProducts.map(prod => {
+                  const count = availableReelsForEdit.filter(r => r.product === prod).length;
+                  return (
+                    <button
+                      key={prod}
+                      type="button"
+                      onClick={() => setEditPickerProductFilter(prod)}
+                      className={`px-2.5 py-0.5 rounded-full text-xs font-bold cursor-pointer transition ${
+                        editPickerProductFilter === prod
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
+                      }`}
+                    >
+                      {prod} ({count})
+                    </button>
+                  );
+                })}
+
+                {/* Grade Filter Pill Group (All, Grade A, Grade B) */}
+                <div className="flex items-center gap-1 ml-auto bg-slate-100 dark:bg-slate-900 p-0.5 rounded-xl border border-slate-200 dark:border-slate-800">
+                  <span className="text-[9px] font-black text-slate-400 uppercase px-1">Grade:</span>
+                  <button
+                    type="button"
+                    onClick={() => setEditPickerGradeFilter('ALL')}
+                    className={`px-2 py-0.5 rounded-lg text-[10px] font-extrabold cursor-pointer transition ${
+                      editPickerGradeFilter === 'ALL'
+                        ? 'bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                    }`}
+                  >
+                    All
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditPickerGradeFilter('A')}
+                    className={`px-2 py-0.5 rounded-lg text-[10px] font-extrabold cursor-pointer transition ${
+                      editPickerGradeFilter === 'A'
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/30'
+                    }`}
+                  >
+                    Grade A
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditPickerGradeFilter('B')}
+                    className={`px-2 py-0.5 rounded-lg text-[10px] font-extrabold cursor-pointer transition ${
+                      editPickerGradeFilter === 'B'
+                        ? 'bg-amber-600 text-white shadow-xs'
+                        : 'text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30'
+                    }`}
+                  >
+                    Grade B Only
+                  </button>
+                </div>
+              </div>
+
+              {/* DESKTOP ONLY: Row C - GSM Filter Chips (HIDDEN ON MOBILE) */}
+              <div className="hidden sm:flex flex-wrap items-center gap-1.5 pt-0.5">
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider mr-1">
+                  GSM:
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => setEditPickerGsmFilter('ALL')}
+                  className={`px-2.5 py-0.5 rounded-full text-xs font-bold cursor-pointer transition ${
+                    editPickerGsmFilter === 'ALL'
+                      ? 'bg-primary text-white shadow-xs'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
+                  }`}
+                >
+                  All GSM
+                </button>
+
+                {editPickerUniqueGsms.map(gsm => {
+                  const count = availableReelsForEdit.filter(r => (editPickerProductFilter === 'ALL' || r.product === editPickerProductFilter) && r.gsm === gsm).length;
+                  return (
+                    <button
+                      key={gsm}
+                      type="button"
+                      onClick={() => setEditPickerGsmFilter(gsm)}
+                      className={`px-2.5 py-0.5 rounded-full text-xs font-bold cursor-pointer transition ${
+                        editPickerGsmFilter === gsm
+                          ? 'bg-primary text-white shadow-xs'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
+                      }`}
+                    >
+                      {gsm} GSM ({count})
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* DESKTOP ONLY: Row D - Size Filter Chips (HIDDEN ON MOBILE) */}
+              <div className="hidden sm:flex flex-wrap items-center gap-1.5 pt-0.5">
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider mr-1">
+                  Decal:
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => setEditPickerSizeFilter('ALL')}
+                  className={`px-2.5 py-0.5 rounded-full text-xs font-bold cursor-pointer transition ${
+                    editPickerSizeFilter === 'ALL'
+                      ? 'bg-primary text-white shadow-xs'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
+                  }`}
+                >
+                  All Decals
+                </button>
+
+                {editPickerUniqueSizes.map(sz => {
+                  const count = availableReelsForEdit.filter(r =>
+                    (editPickerProductFilter === 'ALL' || r.product === editPickerProductFilter) &&
+                    (editPickerGsmFilter === 'ALL' || r.gsm === editPickerGsmFilter) &&
+                    r.size === sz
+                  ).length;
+                  return (
+                    <button
+                      key={sz}
+                      type="button"
+                      onClick={() => setEditPickerSizeFilter(sz)}
+                      className={`px-2.5 py-0.5 rounded-full text-xs font-bold cursor-pointer transition ${
+                        editPickerSizeFilter === sz
+                          ? 'bg-primary text-white shadow-xs'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
+                      }`}
+                    >
+                      {sz} mm ({count})
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* DESKTOP ONLY: Row E - Ply Filter Chips (HIDDEN ON MOBILE) */}
+              <div className="hidden sm:flex flex-wrap items-center gap-1.5 pt-0.5">
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider mr-1">
+                  Ply:
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => setEditPickerPlyFilter('ALL')}
+                  className={`px-2.5 py-0.5 rounded-full text-xs font-bold cursor-pointer transition ${
+                    editPickerPlyFilter === 'ALL'
+                      ? 'bg-amber-900 dark:bg-amber-600 text-white'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
+                  }`}
+                >
+                  All Ply
+                </button>
+
+                {editPickerUniquePlys.map(pVal => {
+                  const count = availableReelsForEdit.filter(r =>
+                    (editPickerProductFilter === 'ALL' || r.product === editPickerProductFilter) &&
+                    (editPickerGsmFilter === 'ALL' || r.gsm === editPickerGsmFilter) &&
+                    (editPickerSizeFilter === 'ALL' || r.size === editPickerSizeFilter) &&
+                    r.ply === pVal
+                  ).length;
+                  return (
+                    <button
+                      key={pVal}
+                      type="button"
+                      onClick={() => setEditPickerPlyFilter(pVal)}
+                      className={`px-2.5 py-0.5 rounded-full text-xs font-bold cursor-pointer transition ${
+                        editPickerPlyFilter === pVal
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
+                      }`}
+                    >
+                      {pVal} Ply ({count})
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Reels Grid / Table Scroll Area */}
+            <div className="flex-1 overflow-auto border border-slate-200 dark:border-slate-800 rounded-2xl max-h-80 min-h-[220px] custom-scrollbar">
+              {filteredAvailableReelsForEdit.length === 0 ? (
+                <div className="py-16 text-center text-slate-400 space-y-2">
+                  <Package className="h-10 w-10 mx-auto opacity-40 text-slate-400" />
+                  <p className="text-xs font-bold">No in-stock reels match your search/filter criteria.</p>
+                  <p className="text-[10px] text-slate-500">Try clearing your filters or check if reels are already in challans.</p>
+                </div>
+              ) : editPickerViewMode === 'grid' ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 p-3">
+                  {filteredAvailableReelsForEdit.map(reel => {
+                    const isSelected = editPickerSelectedNos.includes(reel.reelNo);
+                    const isInfoOpen = !!expandedReelInfo[reel.reelNo];
+                    return (
+                      <div
+                        key={reel.reelNo}
+                        onClick={() => handleTogglePickerReel(reel.reelNo)}
+                        className={`p-3.5 rounded-2xl border transition cursor-pointer select-none relative flex flex-col justify-between gap-2.5 ${
+                          isSelected
+                            ? 'bg-emerald-50/80 dark:bg-[#008163]/15 border-[#008163] shadow-xs ring-1 ring-[#008163]/30'
+                            : 'bg-white dark:bg-slate-900/70 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 shadow-2xs'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          {/* Left: Checkbox + Reel No + Product Badge */}
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className={`p-1 rounded-md transition shrink-0 ${isSelected ? 'bg-[#008163] text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
+                              {isSelected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4" />}
+                            </div>
+                            <div className="min-w-0 flex items-center gap-1.5 flex-wrap">
+                              <span className="font-mono font-black text-xs sm:text-sm text-slate-900 dark:text-white">
+                                {reel.reelNo}
+                              </span>
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60 truncate">
+                                {reel.product}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Right: Actions (Eye Button + Info Accordion Button) */}
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setViewingReelDetails(reel);
+                              }}
+                              className="p-1.5 rounded-xl bg-slate-100 hover:bg-blue-50 text-slate-600 hover:text-blue-600 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 transition cursor-pointer border border-slate-200/80 dark:border-slate-700 shadow-2xs"
+                              title="View Quick Reel Specs & QC Details"
+                            >
+                              <Eye className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleReelInfo(reel.reelNo);
+                              }}
+                              className="p-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300 transition cursor-pointer border border-slate-200/80 dark:border-slate-700 shadow-2xs flex items-center gap-0.5"
+                              title="Toggle Detailed Specifications"
+                            >
+                              <Info className="h-3.5 w-3.5" />
+                              <ChevronDown className={`h-3 w-3 transition-transform duration-200 ${isInfoOpen ? 'rotate-180 text-blue-600' : ''}`} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Subtitle specs line: GSM, Decal, Weight, Ply */}
+                        <div className="text-[11px] text-slate-500 dark:text-slate-400 font-medium pt-1 border-t border-slate-100 dark:border-slate-800/80 flex items-center flex-wrap gap-x-1.5 gap-y-0.5">
+                          <span>GSM: <strong className="text-slate-800 dark:text-slate-200 font-bold">{reel.gsm}</strong></span>
+                          <span>·</span>
+                          <span>Decal: <strong className="text-slate-800 dark:text-slate-200 font-bold">{reel.size ? `${reel.size} cm` : '---'}</strong></span>
+                          <span>·</span>
+                          <span>Weight: <strong className="text-emerald-600 dark:text-emerald-400 font-bold">{reel.weight} KG</strong></span>
+                          <span>·</span>
+                          <span>{reel.ply || 1} Ply</span>
+                        </div>
+
+                        {/* Collapsible Info Drawer if Info button clicked */}
+                        {isInfoOpen && (
+                          <div className="mt-1 p-2.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/60 dark:border-slate-700/60 text-[10px] space-y-1 text-slate-600 dark:text-slate-300 animate-in fade-in duration-150">
+                            <div className="flex justify-between">
+                              <span className="text-slate-400 font-semibold">QC Grade:</span>
+                              <span className={`font-black ${reel.qcGrade === 'B' ? 'text-amber-600' : 'text-[#008163] dark:text-emerald-400'}`}>
+                                Grade {reel.qcGrade || 'A'}
+                              </span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-400 font-semibold">Diameter:</span>
+                              <span className="font-mono font-bold text-slate-800 dark:text-slate-200">{formatDiaInCm(reel.dia)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-400 font-semibold">Joints:</span>
+                              <span className="font-mono font-bold text-slate-800 dark:text-slate-200">{reel.joint || 0}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-400 font-semibold">Parent Roll:</span>
+                              <span className="font-mono font-bold text-slate-800 dark:text-slate-200">Roll #{reel.parentRollNo || 'M-001'}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                /* High-Density Compact Table View */
+                <table className="w-full min-w-[620px] text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-100 dark:border-slate-800 text-[10px] font-black uppercase text-slate-400 bg-slate-50/50 dark:bg-slate-900/30 sticky top-0 bg-white dark:bg-surface-dark z-10">
+                      <th className="py-2.5 px-3 w-10">Select</th>
+                      <th className="py-2.5 px-3">Reel Number</th>
+                      <th className="py-2.5 px-3">Product</th>
+                      <th className="py-2.5 px-3">GSM</th>
+                      <th className="py-2.5 px-3">Size / Decal</th>
+                      <th className="py-2.5 px-3">Ply</th>
+                      <th className="py-2.5 px-3">Weight</th>
+                      <th className="py-2.5 px-3">QC Grade</th>
+                      <th className="py-2.5 px-3 text-right">Preview</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80">
+                    {filteredAvailableReelsForEdit.map(reel => {
+                      const isSelected = editPickerSelectedNos.includes(reel.reelNo);
+                      return (
+                        <tr
+                          key={reel.reelNo}
+                          onClick={() => handleTogglePickerReel(reel.reelNo)}
+                          className={`cursor-pointer transition ${
+                            isSelected
+                              ? 'bg-emerald-50/80 dark:bg-[#008163]/20'
+                              : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/30'
+                          }`}
+                        >
+                          <td className="py-2 px-3">
+                            <div className={`p-1 w-6 h-6 rounded-md flex items-center justify-center transition ${isSelected ? 'bg-[#008163] text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
+                              {isSelected ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
+                            </div>
+                          </td>
+                          <td className="py-2 px-3 font-mono font-bold text-slate-900 dark:text-white">{reel.reelNo}</td>
+                          <td className="py-2 px-3 font-bold text-slate-700 dark:text-slate-300">{reel.product}</td>
+                          <td className="py-2 px-3 font-semibold text-slate-600 dark:text-slate-400">{reel.gsm} GSM</td>
+                          <td className="py-2 px-3 font-semibold text-slate-600 dark:text-slate-400">{reel.size ? `${reel.size} cm` : '---'}</td>
+                          <td className="py-2 px-3 font-semibold text-slate-600 dark:text-slate-400">{reel.ply} Ply</td>
+                          <td className="py-2 px-3 font-mono font-black text-emerald-600 dark:text-emerald-400">{reel.weight} kg</td>
+                          <td className="py-2 px-3 font-black">
+                            <span className={reel.qcGrade === 'B' ? 'text-amber-600' : 'text-[#008163] dark:text-emerald-400'}>
+                              Grade {reel.qcGrade || 'A'}
+                            </span>
+                          </td>
+                          <td className="py-2 px-3 text-right">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setViewingReelDetails(reel);
+                              }}
+                              className="p-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 dark:bg-blue-950/50 dark:text-blue-300 transition cursor-pointer border border-blue-200/60 dark:border-blue-800/60 inline-flex items-center justify-center shadow-2xs"
+                              title="View Quick Reel Specs & QC Details"
+                            >
+                              <Eye className="h-3.5 w-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {/* Bottom Action Bar */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+              <div className="text-xs font-bold text-slate-600 dark:text-slate-400 text-center sm:text-left">
+                Selected: <strong className="text-[#008163] dark:text-emerald-400 font-mono text-sm">{editPickerSelectedNos.length} reels</strong>
+                {editPickerSelectedNos.length > 0 && (
+                  <span className="text-slate-500 font-mono ml-2">
+                    ({reels.filter(r => editPickerSelectedNos.includes(r.reelNo)).reduce((s, r) => s + (r.weight || 0), 0).toLocaleString()} kg)
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={() => setIsEditStockPickerOpen(false)}
+                  className="flex-1 sm:flex-none px-4 py-2.5 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold rounded-xl text-xs transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmAddFromStockPicker}
+                  disabled={editPickerSelectedNos.length === 0}
+                  className={`flex-1 sm:flex-none px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition cursor-pointer flex items-center justify-center gap-1.5 shadow-md ${
+                    editPickerSelectedNos.length === 0
+                      ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
+                      : 'bg-[#008163] hover:bg-[#006e54] text-white shadow-[#008163]/25'
+                  }`}
+                >
+                  <Check className="h-4 w-4" />
+                  <span>Add Selected ({editPickerSelectedNos.length}) to Challan</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. TAB: Dispatched Reels Archive & Vault (Test Section) */}
+      {activeTab === 'dispatched_vault' && (
+        <DispatchedReelsVault
+          reels={reels}
+          slips={slips}
+          parties={parties}
+          vehicles={vehicles}
+          onViewChallan={(slip) => setViewingSlip(slip)}
+          onPrintChallan={(slip) => handlePrintSlip(slip)}
+        />
+      )}
+
+      {/* 4. TAB: Mobile QR Scanner (Mobile Only) */}
+      {activeTab === 'qr_scanner' && (
+        <div className="md:hidden w-full pt-1">
+          <QRScannerView />
+        </div>
+      )}
+
+      {/* Challan View Detail Modal / Printable Receipt (Multi-Page & Spec Grouped) */}
+      {(viewingSlip || directPrintSlip) && (() => {
+        const activeReceiptSlip = viewingSlip || directPrintSlip;
+        if (!activeReceiptSlip) return null;
+
+        const isDirectPrint = isPrintingReceipt || (!viewingSlip && !!directPrintSlip);
+        const partyObj = parties.find(p => p.id === activeReceiptSlip.partyId);
+        const vehicleObj = vehicles.find(v => v.id === activeReceiptSlip.vehicleId || v.vehicleNo === activeReceiptSlip.vehicleId);
+        const vehicleDisplay = vehicleObj ? vehicleObj.vehicleNo : (activeReceiptSlip.vehicleId || 'GJ01EP1234');
+        
+        // Match reels from state or getReels()
+        let linkedReels = reels.filter(r => (activeReceiptSlip.reelNos || []).includes(r.reelNo));
+        if (linkedReels.length === 0) {
+          const allReels = getReels();
+          linkedReels = allReels.filter(r => (activeReceiptSlip.reelNos || []).includes(r.reelNo));
+          if (linkedReels.length === 0) {
+            linkedReels = allReels.filter(r => r.dispatchDetails?.packingSlipNo === activeReceiptSlip.slipNo || r.challanNo === activeReceiptSlip.slipNo);
+          }
+        }
+
+        // Grouping for Product Summary table & Spec-wise Grouping
+        const specMap: { [key: string]: {
+          key: string;
+          product: string;
+          gsm: number;
+          size: number;
+          ply: number;
+          reels: Reel[];
+          totalWeight: number;
+        } } = {};
+
+        linkedReels.forEach(r => {
+          const key = `${r.product || 'Tissue Paper'}__${r.gsm}__${r.size}__${r.ply || 1}`;
+          if (!specMap[key]) {
+            specMap[key] = {
+              key,
+              product: r.product || 'Tissue Paper',
+              gsm: r.gsm,
+              size: r.size,
+              ply: r.ply || 1,
+              reels: [],
+              totalWeight: 0,
+            };
+          }
+          specMap[key].reels.push(r);
+          specMap[key].totalWeight += (r.weight || 0);
+        });
+
+        const specGroupsList = Object.values(specMap);
+        const grandTotalWeight = linkedReels.reduce((sum, r) => sum + (r.weight || 0), 0);
+
+        // Build flattened items list based on group mode
+        type PrintableReelItem = Reel & {
+          displayIndex: number;
+          isGroupStart: boolean;
+          groupLabel: string;
+          groupTotalReels: number;
+          groupTotalWeight: number;
+        };
+
+        const sortedReelItems: PrintableReelItem[] = [];
+        let runningSr = 0;
+
+        if (receiptGroupMode === 'grouped') {
+          specGroupsList.forEach(group => {
+            group.reels.forEach((reel, idxInGroup) => {
+              runningSr += 1;
+              sortedReelItems.push({
+                ...reel,
+                displayIndex: runningSr,
+                isGroupStart: idxInGroup === 0,
+                groupLabel: `${group.product} • ${group.gsm} GSM • ${group.size} MM • ${group.ply} PLY`,
+                groupTotalReels: group.reels.length,
+                groupTotalWeight: group.totalWeight,
+              });
+            });
+          });
+        } else {
+          linkedReels.forEach((reel, idx) => {
+            sortedReelItems.push({
+              ...reel,
+              displayIndex: idx + 1,
+              isGroupStart: false,
+              groupLabel: '',
+              groupTotalReels: 0,
+              groupTotalWeight: 0,
+            });
+          });
+        }
+
+        // A4 Page Split Distribution:
+        // Reels end on Page 1 -> Summary starts immediately below reels on Page 1
+        // Half summary that cannot fit on Page 1 transfers to Page 2
+        // On Page 2: remaining summary + GRAND TOTAL + gap + Signatures right above Footer
+        interface ReceiptPageDistribution {
+          pageNumber: number;
+          reels: PrintableReelItem[];
+          summaryItems: typeof specGroupsList;
+          isSummaryContinuation: boolean;
+          showGrandTotal: boolean;
+          showSignatures: boolean;
+        }
+
+        const totalReelsCount = sortedReelItems.length;
+        const totalSummaryCount = specGroupsList.length;
+        const pages: ReceiptPageDistribution[] = [];
+
+        if (totalReelsCount <= 6) {
+          // Fits fully on 1 single A4 page with summary and signatures
+          pages.push({
+            pageNumber: 1,
+            reels: sortedReelItems,
+            summaryItems: specGroupsList,
+            isSummaryContinuation: false,
+            showGrandTotal: true,
+            showSignatures: true,
+          });
+        } else if (totalReelsCount <= 12) {
+          // Orders with 7..12 reels (like PS-2):
+          // Reels end on Page 1 -> Summary starts immediately below reels on Page 1
+          // Half of summary stays on Page 1 to fill A4 naturally
+          // Remaining half summary + Grand Total + Signatures transfer to Page 2
+          if (totalSummaryCount <= 2) {
+            pages.push({
+              pageNumber: 1,
+              reels: sortedReelItems,
+              summaryItems: specGroupsList,
+              isSummaryContinuation: false,
+              showGrandTotal: true,
+              showSignatures: true,
+            });
+          } else {
+            const p1SummaryCount = Math.min(4, Math.ceil(totalSummaryCount / 2));
+            const p1Summary = specGroupsList.slice(0, p1SummaryCount);
+            const p2Summary = specGroupsList.slice(p1SummaryCount);
+
+            pages.push({
+              pageNumber: 1,
+              reels: sortedReelItems,
+              summaryItems: p1Summary,
+              isSummaryContinuation: false,
+              showGrandTotal: false,
+              showSignatures: false,
+            });
+
+            pages.push({
+              pageNumber: 2,
+              reels: [],
+              summaryItems: p2Summary,
+              isSummaryContinuation: true,
+              showGrandTotal: true,
+              showSignatures: true,
+            });
+          }
+        } else {
+          // Large orders (> 12 reels): Page 1 takes 12 reels, remaining on Page 2+
+          const p1Reels = sortedReelItems.slice(0, 12);
+          let remainingReels = sortedReelItems.slice(12);
+
+          pages.push({
+            pageNumber: 1,
+            reels: p1Reels,
+            summaryItems: [],
+            isSummaryContinuation: false,
+            showGrandTotal: false,
+            showSignatures: false,
+          });
+
+          let pIdx = 2;
+          while (remainingReels.length > 0) {
+            const chunk = remainingReels.slice(0, 14);
+            remainingReels = remainingReels.slice(14);
+            const isLastReelPage = remainingReels.length === 0;
+
+            pages.push({
+              pageNumber: pIdx++,
+              reels: chunk,
+              summaryItems: isLastReelPage ? specGroupsList : [],
+              isSummaryContinuation: false,
+              showGrandTotal: isLastReelPage,
+              showSignatures: isLastReelPage,
+            });
+          }
+        }
+
+        const totalPages = pages.length;
+
+        // Active page for on-screen paged view
+        const currentActivePage = Math.min(Math.max(1, receiptPage), totalPages);
+
+        return createPortal(
+          <div
+            id="printable-receipt-modal"
+            className={`${
+              isDirectPrint
+                ? 'hidden print:block print:w-full print:h-auto print:overflow-visible print:bg-white print:p-0 print:m-0 print:z-auto'
+                : 'fixed inset-0 bg-slate-900/70 backdrop-blur-xs z-50 flex items-center justify-center p-1 sm:p-4 overflow-y-auto overscroll-contain print:static print:block print:w-full print:h-auto print:overflow-visible print:bg-white print:p-0 print:m-0 print:z-auto'
+            }`}
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setViewingSlip(null);
+            }}
+          >
+            <div
+              className={`bg-white text-slate-900 ${
+                isDirectPrint ? '' : 'rounded-2xl sm:rounded-3xl max-w-[225mm] sm:max-w-[230mm] w-full p-2 sm:p-5 space-y-3 shadow-2xl my-auto relative'
+              } print:shadow-none print:w-full print:max-w-none print:p-0 print:m-0 print:rounded-none print:space-y-0 print:block print:overflow-visible`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              
+              {/* Floating Top-Right Close Button (Screen Preview Mode Only) */}
+              {!isDirectPrint && (
+                <button
+                  type="button"
+                  onClick={() => setViewingSlip(null)}
+                  className="absolute top-2.5 right-2.5 sm:top-4 sm:right-4 p-1.5 sm:p-2 text-slate-400 hover:text-slate-700 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 rounded-full transition cursor-pointer z-30 print:hidden shadow-xs"
+                  title="Close"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+
+              {/* Modal Top Toolbar (Screen Preview Mode Only) */}
+              {!isDirectPrint && (
+                <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2.5 sm:gap-3 border-b border-slate-200 pb-3 pr-8 sm:pr-10 print:hidden">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-1.5 sm:p-2 rounded-xl bg-blue-50 text-blue-600">
+                      <FileText className="h-4 sm:h-5 w-4 sm:w-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-xs sm:text-sm font-black text-slate-900 uppercase tracking-wider">
+                        Official Dispatch Receipt Preview
+                      </h3>
+                      <p className="text-[10px] sm:text-xs text-slate-500 font-semibold">
+                        {linkedReels.length} Reels &bull; {grandTotalWeight.toLocaleString()} KG &bull; {totalPages} {totalPages === 1 ? 'Page (A4 Standard)' : 'Pages (A4 Multi-Page)'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                    {/* Spec Group Toggle */}
+                    <div className="flex items-center bg-slate-100 p-0.5 sm:p-1 rounded-xl text-[10px] sm:text-[11px] font-extrabold">
+                      <button
+                        type="button"
+                        onClick={() => setReceiptGroupMode('grouped')}
+                        className={`px-2 sm:px-2.5 py-1 rounded-lg transition cursor-pointer flex items-center gap-1 sm:gap-1.5 ${
+                          receiptGroupMode === 'grouped'
+                            ? 'bg-white text-blue-700 shadow-xs'
+                            : 'text-slate-500 hover:text-slate-900'
+                        }`}
+                      >
+                        <Tag className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                        <span>Group by Spec</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setReceiptGroupMode('sequential')}
+                        className={`px-2 sm:px-2.5 py-1 rounded-lg transition cursor-pointer flex items-center gap-1 sm:gap-1.5 ${
+                          receiptGroupMode === 'sequential'
+                            ? 'bg-white text-blue-700 shadow-xs'
+                            : 'text-slate-500 hover:text-slate-900'
+                        }`}
+                      >
+                        <Hash className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                        <span>List 1..N</span>
+                      </button>
+                    </div>
+
+                    {/* Multi-page Navigation for Screen Preview */}
+                    {totalPages > 1 && (
+                      <div className="flex items-center bg-slate-100 p-0.5 sm:p-1 rounded-xl text-[10px] sm:text-xs font-bold gap-1">
+                        <button
+                          type="button"
+                          disabled={currentActivePage <= 1}
+                          onClick={() => setReceiptPage(p => Math.max(1, p - 1))}
+                          className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-white disabled:opacity-40 disabled:cursor-not-allowed rounded-lg shadow-xs hover:bg-slate-50 cursor-pointer"
+                        >
+                          ◀
+                        </button>
+                        <span className="px-1 sm:px-2 font-mono text-[10px] sm:text-[11px] font-black text-slate-700">
+                          Page {currentActivePage} / {totalPages}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={currentActivePage >= totalPages}
+                          onClick={() => setReceiptPage(p => Math.min(totalPages, p + 1))}
+                          className="px-1.5 sm:px-2 py-0.5 sm:py-1 bg-white disabled:opacity-40 disabled:cursor-not-allowed rounded-lg shadow-xs hover:bg-slate-50 cursor-pointer"
+                        >
+                          ▶
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Action Button */}
+                    <button
+                      type="button"
+                      disabled={isViewer}
+                      onClick={handlePrintChallan}
+                      title={isViewer ? "Printing locked for Viewer (Read-Only)" : undefined}
+                      className={`px-3 sm:px-4 py-1.5 sm:py-2 text-[10px] sm:text-xs uppercase tracking-wider flex items-center gap-1 sm:gap-1.5 rounded-xl font-bold transition ${
+                        isViewer
+                          ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed border border-slate-300 dark:border-slate-700'
+                          : 'btn-primary-gradient cursor-pointer'
+                      }`}
+                    >
+                      {isViewer ? <Lock className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-amber-500" /> : <Printer className="h-3.5 w-3.5 sm:h-4 sm:w-4" />}
+                      <span>{isViewer ? 'Print (Locked)' : `Print All (${totalPages})`}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* PRINTABLE RECEIPT CONTAINER (Multi-Page A4 Sheet Stack) */}
+              <div className={`${isDirectPrint ? '' : 'bg-slate-200/90 p-2 sm:p-5 rounded-xl sm:rounded-2xl space-y-6 max-h-[82vh] overflow-y-auto'} print:bg-white print:p-0 print:m-0 print:space-y-0 print:block print:overflow-visible print:max-h-none`}>
+                {pages.map((pageData, pageIndex) => {
+                  const pageNumber = pageIndex + 1;
+                  const isHiddenOnScreen = !isDirectPrint && receiptViewMode === 'paged' && pageNumber !== currentActivePage;
+
+                  return (
+                    <div
+                      key={pageIndex}
+                      className={`${
+                        isDirectPrint
+                          ? 'flex flex-col justify-between min-h-[265mm]'
+                          : 'bg-white p-5 sm:p-7 text-black font-sans shadow-2xl border border-slate-300 rounded-sm mx-auto w-[210mm] max-w-full min-h-[297mm] flex flex-col justify-between'
+                      } print:min-h-[265mm] print:h-auto print:max-h-none print:shadow-none print:border-none print:p-0 print:m-0 print:rounded-none print-page-break print:flex print:flex-col print:justify-between ${
+                        isHiddenOnScreen ? 'hidden print:flex' : 'flex'
+                      }`}
+                      style={{
+                        pageBreakAfter: pageIndex < totalPages - 1 ? 'always' : 'auto',
+                        breakAfter: pageIndex < totalPages - 1 ? 'page' : 'auto',
+                        pageBreakInside: 'avoid',
+                        breakInside: 'avoid',
+                      }}
+                    >
+                      {/* Top Document Content (Header, Metadata, Tables) */}
+                      <div className="flex-1">
+                        {/* 1. Header Banner & Metadata (Full on Page 1, Compact Continuation on Page 2+) */}
+                        {pageIndex === 0 ? (
+                          <>
+                            <div className="border-b-2 border-black pb-2 mb-2.5 sm:mb-3 text-center">
+                              <h1 className="text-lg sm:text-2xl font-black tracking-tight text-black uppercase leading-tight font-heading">
+                                SAHEB PAPER PVT. LTD.
+                              </h1>
+                            </div>
+
+                            {/* 2. Document Title */}
+                            <div className="text-center my-1.5 sm:my-2">
+                              <h2 className="text-sm sm:text-lg font-black tracking-[0.2em] sm:tracking-[0.25em] text-black uppercase">
+                                DISPATCH RECEIPT
+                              </h2>
+                            </div>
+
+                            {/* 3. Metadata Box */}
+                            <div className="border border-slate-300 rounded p-2.5 sm:p-3 text-[10px] sm:text-xs text-left grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-y-2.5 sm:gap-x-3 font-sans bg-white mb-3 sm:mb-3.5">
+                              <div>
+                                <span className="text-[8px] sm:text-[9px] font-extrabold text-slate-500 uppercase tracking-wider block">RECEIPT NO</span>
+                                <span className="font-bold font-mono text-black text-[11px] sm:text-sm">{activeReceiptSlip.slipNo}</span>
+                              </div>
+                              <div>
+                                <span className="text-[8px] sm:text-[9px] font-extrabold text-slate-500 uppercase tracking-wider block">ORDER NO</span>
+                                <span className="font-bold font-mono text-black text-[11px] sm:text-sm">{activeReceiptSlip.orderNo || '—'}</span>
+                              </div>
+                              <div>
+                                <span className="text-[8px] sm:text-[9px] font-extrabold text-slate-500 uppercase tracking-wider block">DISPATCH DATE</span>
+                                <span className="font-bold text-black text-[11px] sm:text-sm">{activeReceiptSlip.date}</span>
+                              </div>
+                              <div>
+                                <span className="text-[8px] sm:text-[9px] font-extrabold text-slate-500 uppercase tracking-wider block">CUSTOMER / PARTY</span>
+                                <span className="font-bold text-black text-[11px] sm:text-sm block truncate">{partyObj?.name || 'Walk-in'}</span>
+                                {(partyObj?.address || (activeReceiptSlip as any).partyAddress) && (
+                                  <span className="text-[8px] sm:text-[9px] text-slate-600 block truncate">{partyObj?.address || (activeReceiptSlip as any).partyAddress}</span>
+                                )}
+                                {(partyObj?.contact || (activeReceiptSlip as any).partyContact || (activeReceiptSlip as any).contact) && (
+                                  <span className="text-[8px] sm:text-[9px] font-mono text-slate-700 block truncate">Ph: {partyObj?.contact || (activeReceiptSlip as any).partyContact || (activeReceiptSlip as any).contact}</span>
+                                )}
+                              </div>
+                              <div>
+                                <span className="text-[8px] sm:text-[9px] font-extrabold text-slate-500 uppercase tracking-wider block">VEHICLE / TRUCK NO</span>
+                                <span className="font-bold font-mono text-black text-[11px] sm:text-sm uppercase block truncate">{vehicleDisplay}</span>
+                                {(vehicleObj?.driverContact || (activeReceiptSlip as any).driverContact) && (
+                                  <span className="text-[8px] sm:text-[9px] font-mono text-slate-700 block truncate">Driver Ph: {vehicleObj?.driverContact || (activeReceiptSlip as any).driverContact}</span>
+                                )}
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          /* Compact Continuation Header for Page 2+ (Factory Name ONLY on Page 1) */
+                          <div className="border-b-2 border-black pb-2 mb-3 sm:mb-3.5 text-left flex justify-between items-center">
+                            <div className="flex items-center gap-2">
+                              <h2 className="text-sm sm:text-base font-black tracking-wider text-black uppercase">
+                                DISPATCH RECEIPT (CONTD.)
+                              </h2>
+                              <span className="text-[9px] sm:text-[10px] font-bold font-mono text-slate-800 bg-slate-100 px-2 py-0.5 rounded border border-slate-300">
+                                {activeReceiptSlip.slipNo}
+                              </span>
+                            </div>
+                            <div className="text-right text-[9px] sm:text-[10px] font-mono text-slate-600 font-bold">
+                              <span>Date: {activeReceiptSlip.date}</span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 4. DISPATCHED REELS Table (Only if this page has reels) */}
+                        {pageData.reels.length > 0 && (() => {
+                          const prevItemsCount = pages.slice(0, pageIndex).reduce((sum, p) => sum + p.reels.length, 0);
+                          const startItemIndex = prevItemsCount + 1;
+                          const endItemIndex = prevItemsCount + pageData.reels.length;
+
+                          return (
+                            <div className="mb-3.5 sm:mb-4 text-left">
+                              <div className="flex items-center justify-between mb-1.5">
+                                <h3 className="text-[11px] sm:text-xs font-black text-black uppercase tracking-wider">
+                                  DISPATCHED REELS {pageData.reels.length < sortedReelItems.length ? `(Part ${pageNumber} of ${totalPages})` : `(${sortedReelItems.length} REELS)`}
+                                </h3>
+                                <span className="text-[9px] sm:text-[10px] font-bold text-slate-500">
+                                  Showing items {startItemIndex} - {endItemIndex} of {sortedReelItems.length}
+                                </span>
+                              </div>
+
+                              <div className="border border-slate-300 overflow-x-auto">
+                                <table className="w-full text-left text-[10px] sm:text-xs border-collapse font-sans">
+                                  <thead className="bg-[#0B132B] text-white uppercase text-[9px] sm:text-[10.5px] font-black tracking-wider">
+                                    <tr>
+                                      <th className="py-2 sm:py-2.5 px-1.5 sm:px-3 text-center w-8 sm:w-10">SR</th>
+                                      <th className="py-2 sm:py-2.5 px-2 sm:px-3.5 font-mono">REEL NO</th>
+                                      <th className="py-2 sm:py-2.5 px-2 sm:px-3.5">PRODUCT</th>
+                                      <th className="py-2 sm:py-2.5 px-1.5 sm:px-3 text-center">GSM</th>
+                                      <th className="py-2 sm:py-2.5 px-1.5 sm:px-3 text-center whitespace-nowrap">DECAL (MM)</th>
+                                      <th className="py-2 sm:py-2.5 px-1.5 sm:px-3 text-center">PLY</th>
+                                      <th className="py-2 sm:py-2.5 px-2 sm:px-3.5 text-right whitespace-nowrap">WEIGHT (KG)</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-200 text-slate-900 font-medium">
+                                    {pageData.reels.map((reel, rIdx) => (
+                                      <React.Fragment key={reel.reelNo}>
+                                        {receiptGroupMode === 'grouped' && (reel.isGroupStart || rIdx === 0) && (
+                                          <tr className="bg-slate-100 font-black border-y border-slate-300">
+                                            <td colSpan={7} className="py-1.5 sm:py-2 px-2.5 sm:px-3.5">
+                                              <div className="flex items-center justify-between">
+                                                <span className="text-[10px] sm:text-xs font-extrabold uppercase tracking-wide flex items-center gap-1.5">
+                                                  <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-blue-600 inline-block"></span>
+                                                  {reel.groupLabel} {(!reel.isGroupStart && rIdx === 0) ? '(Contd.)' : ''}
+                                                </span>
+                                                <span className="text-[9px] sm:text-[10.5px] font-black text-slate-700 bg-white px-2 py-0.5 rounded border border-slate-300">
+                                                  {reel.groupTotalReels} Reels &bull; {reel.groupTotalWeight.toLocaleString()} KG
+                                                </span>
+                                              </div>
+                                            </td>
+                                          </tr>
+                                        )}
+                                        <tr className="hover:bg-slate-50">
+                                          <td className="py-2 sm:py-2.5 px-1.5 sm:px-3 text-center font-bold text-slate-700">{reel.displayIndex}</td>
+                                          <td className="py-2 sm:py-2.5 px-2 sm:px-3.5 font-mono font-bold whitespace-nowrap">{reel.reelNo}</td>
+                                          <td className="py-2 sm:py-2.5 px-2 sm:px-3.5 truncate max-w-[110px] sm:max-w-none">{reel.product}</td>
+                                          <td className="py-2 sm:py-2.5 px-1.5 sm:px-3 text-center font-semibold">{reel.gsm}</td>
+                                          <td className="py-2 sm:py-2.5 px-1.5 sm:px-3 text-center font-semibold">{reel.size}</td>
+                                          <td className="py-2 sm:py-2.5 px-1.5 sm:px-3 text-center font-semibold">{reel.ply || 1}</td>
+                                          <td className="py-2 sm:py-2.5 px-2 sm:px-3.5 text-right font-mono font-bold whitespace-nowrap">{reel.weight}</td>
+                                        </tr>
+                                      </React.Fragment>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        {/* 5. PRODUCT SUMMARY Table (Starts on Page 1 immediately below reels, continues to Page 2 if needed) */}
+                        {pageData.summaryItems.length > 0 && (
+                          <div className="mb-3.5 sm:mb-4 text-left">
+                            <h3 className="text-xs sm:text-sm font-black text-black uppercase tracking-wider mb-1.5 sm:mb-2">
+                              {pageData.isSummaryContinuation
+                                ? 'PRODUCT SUMMARY (ITEMIZED BREAKDOWN - CONTD.)'
+                                : 'PRODUCT SUMMARY (ITEMIZED BREAKDOWN)'}
+                            </h3>
+                            <div className="border border-slate-300 overflow-x-auto">
+                              <table className="w-full text-left text-[10px] sm:text-xs border-collapse font-sans">
+                                <thead className="bg-[#0B132B] text-white uppercase text-[9px] sm:text-[10.5px] font-black tracking-wider">
+                                  <tr>
+                                    <th className="py-2 sm:py-2.5 px-2 sm:px-3.5">PRODUCT SPECIFICATION</th>
+                                    <th className="py-2 sm:py-2.5 px-1.5 sm:px-3 text-center">GSM</th>
+                                    <th className="py-2 sm:py-2.5 px-1.5 sm:px-3 text-center">DECAL</th>
+                                    <th className="py-2 sm:py-2.5 px-1.5 sm:px-3 text-center">PLY</th>
+                                    <th className="py-2 sm:py-2.5 px-1.5 sm:px-3 text-center">REELS</th>
+                                    <th className="py-2 sm:py-2.5 px-2 sm:px-3.5 text-right whitespace-nowrap">TOTAL WEIGHT</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-200 text-slate-900 font-medium">
+                                  {pageData.summaryItems.map((item, idx) => (
+                                    <tr key={idx} className="hover:bg-slate-50">
+                                      <td className="py-2 sm:py-2.5 px-2 sm:px-3.5 font-bold">{item.product}</td>
+                                      <td className="py-2 sm:py-2.5 px-1.5 sm:px-3 text-center">{item.gsm}</td>
+                                      <td className="py-2 sm:py-2.5 px-1.5 sm:px-3 text-center whitespace-nowrap">{item.size} MM</td>
+                                      <td className="py-2 sm:py-2.5 px-1.5 sm:px-3 text-center whitespace-nowrap">{item.ply} Ply</td>
+                                      <td className="py-2 sm:py-2.5 px-1.5 sm:px-3 text-center font-bold font-mono">{item.reels.length}</td>
+                                      <td className="py-2 sm:py-2.5 px-2 sm:px-3.5 text-right font-mono font-bold whitespace-nowrap">{item.totalWeight.toLocaleString()} KG</td>
+                                    </tr>
+                                  ))}
+                                  {/* GRAND TOTAL Row */}
+                                  {pageData.showGrandTotal && (
+                                    <tr className="bg-[#FEE4CB] font-black text-slate-950 border-t-2 border-slate-300 text-xs sm:text-sm">
+                                      <td colSpan={4} className="py-2 sm:py-2.5 px-2 sm:px-3.5 uppercase tracking-wider font-black">
+                                        GRAND TOTAL
+                                      </td>
+                                      <td className="py-2 sm:py-2.5 px-1.5 sm:px-3 text-center font-mono font-black text-xs sm:text-sm">
+                                        {linkedReels.length} Reels
+                                      </td>
+                                      <td className="py-2 sm:py-2.5 px-2 sm:px-3.5 text-right font-mono font-black text-xs sm:text-sm whitespace-nowrap">
+                                        {grandTotalWeight.toLocaleString()} KG
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Bottom Section Anchored at End of Page (Signatures + Footer) */}
+                      <div className="mt-auto pt-2 sm:pt-3 space-y-2.5 sm:space-y-3.5">
+                        {/* 6. Signatures (Strictly on Last Page) */}
+                        {pageData.showSignatures && (
+                          <div className="grid grid-cols-3 gap-2 sm:gap-6 pt-3 sm:pt-4 mb-2 text-center font-sans">
+                            <div className="border-t-2 border-black pt-1.5 sm:pt-2">
+                              <span className="text-[8.5px] sm:text-xs font-black uppercase text-black tracking-wider block">
+                                PREPARED BY
+                              </span>
+                            </div>
+                            <div className="border-t-2 border-black pt-1.5 sm:pt-2">
+                              <span className="text-[8.5px] sm:text-xs font-black uppercase text-black tracking-wider block">
+                                DRIVER SIGNATURE
+                              </span>
+                            </div>
+                            <div className="border-t-2 border-black pt-1.5 sm:pt-2">
+                              <span className="text-[8.5px] sm:text-xs font-black uppercase text-black tracking-wider block">
+                                RECEIVER / GATE
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 7. Footer Caption with Page Count (Factory Name ONLY on Page 1) */}
+                        <div className="text-center text-[8px] sm:text-[9px] font-semibold text-slate-600 pt-2 border-t border-slate-200 flex justify-between items-center gap-2">
+                          <span className="truncate">
+                            {pageIndex === 0
+                              ? `${COMPANY_CONFIG.name} • ${COMPANY_CONFIG.shortAddress} • Ph: ${COMPANY_CONFIG.phone} • ${COMPANY_CONFIG.website}`
+                              : `${COMPANY_CONFIG.shortAddress} • Ph: ${COMPANY_CONFIG.phone} • ${COMPANY_CONFIG.website}`
+                            }
+                          </span>
+                          <span className="font-mono font-bold shrink-0">Page {pageNumber} of {totalPages}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+            </div>
+          </div>,
+          document.body
+        );
+      })()}
+
+      {/* Quick Reel Specs & QC Inspection Modal */}
+      {viewingReelDetails &&
+        createPortal(
+          <div
+            id="quick-reel-specs-modal"
+            className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto overscroll-contain animate-in fade-in duration-150"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setViewingReelDetails(null);
+            }}
+          >
+            <div
+              className="bg-white dark:bg-slate-900 text-slate-900 dark:text-white rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl max-w-lg w-full p-5 sm:p-6 space-y-4 text-left my-auto relative animate-in zoom-in-95 duration-150"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Modal Top Header */}
+              <div className="flex items-start justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-2xl bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border border-blue-200/80 dark:border-blue-800/80">
+                    <Package className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm sm:text-base font-black text-slate-900 dark:text-white tracking-tight">
+                      Reel Technical Specs &amp; QC
+                    </h3>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">
+                      Live mill parameters, dimensions, and label identity
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setViewingReelDetails(null)}
+                  className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full transition cursor-pointer shadow-2xs"
+                  title="Close popup"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Reel Identity Banner Card */}
+              <div className="p-4 bg-gradient-to-r from-slate-50 to-blue-50/40 dark:from-slate-800/80 dark:to-blue-950/30 border border-slate-200 dark:border-slate-700/80 rounded-2xl flex items-center justify-between gap-3 shadow-2xs">
+                <div className="min-w-0">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
+                    REEL IDENTIFIER NO
+                  </span>
+                  <div className="text-lg sm:text-xl font-black font-mono tracking-tight text-slate-900 dark:text-white truncate">
+                    {viewingReelDetails.reelNo}
+                  </div>
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                      {viewingReelDetails.product || 'Standard Grade Paper'}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
+                      {(viewingReelDetails as any).rewinderNo || 'Rewinder #1'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="text-right shrink-0 space-y-1">
+                  <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider ${
+                    viewingReelDetails.qcGrade === 'B'
+                      ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200 dark:border-amber-800'
+                      : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                  }`}>
+                    <CheckCircle className="h-3.5 w-3.5" />
+                    <span>Grade {viewingReelDetails.qcGrade || 'A'}</span>
+                  </span>
+                  <div className="text-[10px] font-bold text-slate-400">
+                    Status: <span className="font-mono text-slate-600 dark:text-slate-300">{viewingReelDetails.status || 'IN_STOCK'}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 8-Card Technical Specification Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-center">
+                {/* GSM */}
+                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-2xl shadow-2xs">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">GSM</span>
+                  <span className="text-base font-black text-slate-900 dark:text-white font-mono mt-0.5 block">
+                    {viewingReelDetails.gsm} <span className="text-[10px] text-slate-400 font-normal">GSM</span>
+                  </span>
+                </div>
+
+                {/* Size / Decal */}
+                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-2xl shadow-2xs">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">DECAL / SIZE</span>
+                  <span className="text-base font-black text-slate-900 dark:text-white font-mono mt-0.5 block">
+                    {viewingReelDetails.size ? `${viewingReelDetails.size} cm` : '—'}
+                  </span>
+                </div>
+
+                {/* Diameter in CM */}
+                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-2xl shadow-2xs">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">DIAMETER</span>
+                  <span className="text-base font-black text-slate-900 dark:text-white font-mono mt-0.5 block">
+                    {formatDiaInCm(viewingReelDetails.dia)}
+                  </span>
+                </div>
+
+                {/* Net Weight */}
+                <div className="p-3 bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60 rounded-2xl shadow-2xs">
+                  <span className="text-[10px] font-black text-emerald-700 dark:text-emerald-300 uppercase tracking-wider block">NET WEIGHT</span>
+                  <span className="text-base font-black text-emerald-600 dark:text-emerald-400 font-mono mt-0.5 block">
+                    {viewingReelDetails.weight} <span className="text-[10px] font-normal">KG</span>
+                  </span>
+                </div>
+
+                {/* Ply */}
+                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-2xl shadow-2xs">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">PLY</span>
+                  <span className="text-base font-black text-slate-900 dark:text-white font-mono mt-0.5 block">
+                    {viewingReelDetails.ply || 1} Ply
+                  </span>
+                </div>
+
+                {/* Joints */}
+                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-2xl shadow-2xs">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">JOINTS</span>
+                  <span className="text-base font-black text-slate-900 dark:text-white font-mono mt-0.5 block">
+                    {viewingReelDetails.joint ?? 0}
+                  </span>
+                </div>
+
+                {/* Parent Roll */}
+                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-2xl shadow-2xs">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">PARENT ROLL</span>
+                  <span className="text-xs font-black text-slate-900 dark:text-white font-mono mt-1 block truncate">
+                    #{viewingReelDetails.parentRollNo || 'M-001'}
+                  </span>
+                </div>
+
+                {/* Mfg Date */}
+                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-2xl shadow-2xs">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">MFG DATE</span>
+                  <span className="text-xs font-black text-slate-700 dark:text-slate-300 font-mono mt-1 block truncate">
+                    {viewingReelDetails.productionDate || new Date().toISOString().substring(0, 10)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Action Toolbar */}
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setViewingReelDetails(null)}
+                  className="w-full sm:w-auto px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-bold transition cursor-pointer"
+                >
+                  Close
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedReelForPrint(viewingReelDetails);
+                    setShowPrintLabelModal(true);
+                  }}
+                  className="w-full sm:w-auto px-5 py-2.5 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-black uppercase tracking-wider transition cursor-pointer flex items-center justify-center gap-2 shadow-md shadow-blue-500/25 active:scale-95"
+                >
+                  <Printer className="h-4 w-4" />
+                  <span>Print Thermal Label</span>
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* Universal Thermal Label Print Modal */}
+      <PrintLabelModal
+        isOpen={showPrintLabelModal}
+        onClose={() => {
+          setShowPrintLabelModal(false);
+          setSelectedReelForPrint(null);
+        }}
+        initialReel={selectedReelForPrint}
+        initialCode={selectedReelForPrint?.reelNo || ''}
+      />
+
+    </div>
+  );
+};
+export default DispatchView;
