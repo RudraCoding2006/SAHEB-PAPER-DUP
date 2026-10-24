@@ -3,8 +3,7 @@
 -- Target Project: SAHEB-PAPER-ERP-DUP (qhatwhupcahsfzpjemye)
 -- ==============================================================================
 
--- Saheb Paper ERP Initial Database Schema
--- 18 Tables covering all ERP production & management modules
+ALTER DATABASE postgres SET timezone TO 'Asia/Kolkata';
 
 -- 1. USERS TABLE
 CREATE TABLE IF NOT EXISTS public.users (
@@ -22,7 +21,8 @@ CREATE TABLE IF NOT EXISTS public.users (
     emp_id TEXT,
     designation TEXT,
     custom_modules JSONB DEFAULT '[]'::jsonb,
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 2. RAW MATERIALS
@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS public.raw_materials (
     min_threshold NUMERIC(12,2) DEFAULT 0,
     active BOOLEAN DEFAULT true,
     used_in_module TEXT,
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 3. RAW MATERIAL LOTS
@@ -46,7 +47,8 @@ CREATE TABLE IF NOT EXISTS public.raw_material_lots (
     vendor_name TEXT NOT NULL,
     date TEXT NOT NULL,
     operator TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 4. PRODUCTS
@@ -57,7 +59,8 @@ CREATE TABLE IF NOT EXISTS public.products (
     gsm NUMERIC(8,2) NOT NULL,
     size NUMERIC(8,2) NOT NULL,
     ply INT DEFAULT 1,
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 5. PARTIES (CUSTOMERS)
@@ -66,7 +69,8 @@ CREATE TABLE IF NOT EXISTS public.parties (
     name TEXT NOT NULL,
     contact TEXT,
     address TEXT,
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 6. VENDORS
@@ -75,7 +79,8 @@ CREATE TABLE IF NOT EXISTS public.vendors (
     name TEXT NOT NULL,
     contact TEXT,
     address TEXT,
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 7. VEHICLES
@@ -84,7 +89,8 @@ CREATE TABLE IF NOT EXISTS public.vehicles (
     vehicle_no TEXT NOT NULL,
     driver_name TEXT,
     driver_contact TEXT,
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 8. PULP FORMULAS
@@ -93,7 +99,8 @@ CREATE TABLE IF NOT EXISTS public.pulp_formulas (
     date TEXT NOT NULL,
     waste_mix JSONB DEFAULT '{}'::jsonb,
     chemicals JSONB DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 9. MACHINE ROLLS
@@ -112,7 +119,8 @@ CREATE TABLE IF NOT EXISTS public.machine_rolls (
     downtime_reason TEXT,
     date TEXT NOT NULL,
     formula_id TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 10. REELS (FINISHED CUT REELS)
@@ -136,7 +144,8 @@ CREATE TABLE IF NOT EXISTS public.reels (
     qc_brightness NUMERIC(8,2),
     qc_softness NUMERIC(8,2),
     dispatch_details JSONB,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 11. TRANSACTION LOGS / AUDIT TRAIL
@@ -147,7 +156,9 @@ CREATE TABLE IF NOT EXISTS public.transaction_logs (
     action TEXT NOT NULL,
     details TEXT NOT NULL,
     user_name TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    "user" TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 12. BOILER LOGS
@@ -160,7 +171,8 @@ CREATE TABLE IF NOT EXISTS public.boiler_logs (
     temperature NUMERIC(8,2),
     operator TEXT NOT NULL,
     shift TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 13. ETP LOGS
@@ -170,7 +182,8 @@ CREATE TABLE IF NOT EXISTS public.etp_logs (
     flock_liq NUMERIC(12,2) DEFAULT 0,
     flock_master NUMERIC(12,2) DEFAULT 0,
     operator TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 14. ELECTRICITY LOGS
@@ -179,7 +192,8 @@ CREATE TABLE IF NOT EXISTS public.electricity_logs (
     date TEXT NOT NULL,
     units NUMERIC(12,2) DEFAULT 0,
     operator TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 15. PENDING ORDERS
@@ -196,7 +210,8 @@ CREATE TABLE IF NOT EXISTS public.pending_orders (
     due_date TEXT NOT NULL,
     status TEXT DEFAULT 'PENDING',
     dispatched_qty INT DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 16. PACKING SLIPS
@@ -212,7 +227,8 @@ CREATE TABLE IF NOT EXISTS public.packing_slips (
     status TEXT DEFAULT 'DRAFT',
     dispatch_date TEXT,
     dispatch_time TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 17. STORE ITEMS (SPARES, BEARINGS, V-BELTS)
@@ -226,7 +242,8 @@ CREATE TABLE IF NOT EXISTS public.store_items (
     target_machine TEXT,
     min_stock INT DEFAULT 0,
     remarks TEXT,
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 18. PAPER TEST REPORTS (LAB QC)
@@ -264,10 +281,11 @@ CREATE TABLE IF NOT EXISTS public.paper_test_reports (
     remarks TEXT,
     inspector TEXT,
     timestamp TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- ENABLE ROW LEVEL SECURITY AND SECURE POLICIES FOR ALL TABLES
+-- ROW LEVEL SECURITY AND PERMISSIVE POLICIES
 DO $$
 DECLARE
     t text;
@@ -293,10 +311,7 @@ BEGIN
     END LOOP;
 END $$;
 
-
--- IST TIMEZONE & AUTOMATED UPDATED_AT TRIGGER
-ALTER DATABASE postgres SET timezone TO 'Asia/Kolkata';
-
+-- AUTOMATED UPDATED_AT TRIGGER
 CREATE OR REPLACE FUNCTION public.handle_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
