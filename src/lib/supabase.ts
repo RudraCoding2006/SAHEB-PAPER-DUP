@@ -1,19 +1,19 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+﻿import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// ── 1. MAIN PRODUCTION DATABASE (Live Factory Data for Cloudflare / GitHub / APK / EXE) ──
+// â”€â”€ 1. MAIN PRODUCTION DATABASE (Live Factory Data for Cloudflare / GitHub / APK / EXE) â”€â”€
 export const PROD_SUPABASE_CONFIG = {
-  url: 'https://znyvmlwggwckjxxsxiwq.supabase.co',
+  url: 'https://qhatwhupcahsfzpjemye.supabase.co',
   anonKey:
-    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpueXZtbHdnZ3dja2p4eHN4aXdxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk0OTE0NjUsImV4cCI6MjEwNTA2NzQ2NX0._NNVeLFW1OvXnTGYZbCcEmd4eYSF2J8g5Zxi6T4kdqY',
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFoYXR3aHVwY2Foc2Z6cGplbXllIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI4NTgzMjMsImV4cCI6MjEwODQzNDMyM30.x_OiF5gPyUqLt5zaKKcrpwY8Wi-LyhzJE6ZkyFF6a3o',
   name: 'Main Factory Database (Production)',
   target: 'prod' as const,
 };
 
-// ── 2. DEMO / TEST DATABASE (Isolated Sandbox for Localhost Testing) ──
+// â”€â”€ 2. DEMO / TEST DATABASE (Isolated Sandbox for Localhost Testing) â”€â”€
 export const DEMO_SUPABASE_CONFIG = {
-  url: 'https://scyiwfqkknuphzhvklok.supabase.co',
+  url: 'https://qhatwhupcahsfzpjemye.supabase.co',
   anonKey:
-    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNjeWl3ZnFra251cGh6aHZrbG9rIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg2OTI1NjgsImV4cCI6MjEwNDI2ODU2OH0.uSIcsebYEW2uIgn_E6__Y2jg9te2NSHLMl3liZp3qmw',
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFoYXR3aHVwY2Foc2Z6cGplbXllIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI4NTgzMjMsImV4cCI6MjEwODQzNDMyM30.x_OiF5gPyUqLt5zaKKcrpwY8Wi-LyhzJE6ZkyFF6a3o',
   name: 'Demo Sandbox Database (Testing)',
   target: 'demo' as const,
 };
@@ -131,5 +131,6 @@ if (typeof window !== 'undefined') {
     'color: #10b981; font-weight: bold; margin-left: 6px;'
   );
 }
+
 
 

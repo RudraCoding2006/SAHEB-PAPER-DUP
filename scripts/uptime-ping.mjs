@@ -1,10 +1,10 @@
-/**
- * Saheb Paper ERP — Supabase Health Check & Uptime Ping Bot
+﻿/**
+ * Saheb Paper ERP â€” Supabase Health Check & Uptime Ping Bot
  * Checks Supabase REST connectivity and measures latency.
  */
 
-const SUPABASE_URL = (process.env.VITE_SUPABASE_URL || 'https://znyvmlwggwckjxxsxiwq.supabase.co').replace(/\/$/, '');
-const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpueXZtbHdnZ3dja2p4eHN4aXdxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk0OTE0NjUsImV4cCI6MjEwNTA2NzQ2NX0._NNVeLFW1OvXnTGYZbCcEmd4eYSF2J8g5Zxi6T4kdqY';
+const SUPABASE_URL = (process.env.VITE_SUPABASE_URL || 'https://qhatwhupcahsfzpjemye.supabase.co').replace(/\/$/, '');
+const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFoYXR3aHVwY2Foc2Z6cGplbXllIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI4NTgzMjMsImV4cCI6MjEwODQzNDMyM30.x_OiF5gPyUqLt5zaKKcrpwY8Wi-LyhzJE6ZkyFF6a3o';
 
 async function checkHealth() {
   const startTime = Date.now();
@@ -19,16 +19,17 @@ async function checkHealth() {
 
     const duration = Date.now() - startTime;
     if (res.ok) {
-      console.log(`✅ [UPTIME OK] Supabase response time: ${duration}ms (Status: ${res.status})`);
+      console.log(`âœ… [UPTIME OK] Supabase response time: ${duration}ms (Status: ${res.status})`);
       process.exit(0);
     } else {
-      console.error(`❌ [UPTIME ERROR] Supabase responded with status: ${res.status}`);
+      console.error(`âŒ [UPTIME ERROR] Supabase responded with status: ${res.status}`);
       process.exit(1);
     }
   } catch (err) {
-    console.error(`❌ [UPTIME FAILED] Connection error:`, err.message);
+    console.error(`âŒ [UPTIME FAILED] Connection error:`, err.message);
     process.exit(1);
   }
 }
 
 checkHealth();
+

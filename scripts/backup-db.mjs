@@ -1,13 +1,13 @@
-/**
- * Saheb Paper ERP — Automated Nightly Database Backup Script
+﻿/**
+ * Saheb Paper ERP â€” Automated Nightly Database Backup Script
  * Fetches all 18 PostgreSQL tables from Supabase and saves a timestamped JSON artifact.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 
-const SUPABASE_URL = (process.env.VITE_SUPABASE_URL || 'https://znyvmlwggwckjxxsxiwq.supabase.co').replace(/\/$/, '');
-const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpueXZtbHdnZ3dja2p4eHN4aXdxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk0OTE0NjUsImV4cCI6MjEwNTA2NzQ2NX0._NNVeLFW1OvXnTGYZbCcEmd4eYSF2J8g5Zxi6T4kdqY';
+const SUPABASE_URL = (process.env.VITE_SUPABASE_URL || 'https://qhatwhupcahsfzpjemye.supabase.co').replace(/\/$/, '');
+const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFoYXR3aHVwY2Foc2Z6cGplbXllIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI4NTgzMjMsImV4cCI6MjEwODQzNDMyM30.x_OiF5gPyUqLt5zaKKcrpwY8Wi-LyhzJE6ZkyFF6a3o';
 
 const TABLES = [
   'users',
@@ -41,7 +41,7 @@ async function fetchTableData(tableName) {
   });
 
   if (!response.ok) {
-    console.warn(`⚠️ Warning: Table '${tableName}' returned status ${response.status}`);
+    console.warn(`âš ï¸ Warning: Table '${tableName}' returned status ${response.status}`);
     return [];
   }
 
@@ -49,8 +49,8 @@ async function fetchTableData(tableName) {
 }
 
 async function runBackup() {
-  console.log(`📦 [Saheb Paper ERP] Starting Nightly Database Backup...`);
-  console.log(`📡 Connecting to: ${SUPABASE_URL}`);
+  console.log(`ðŸ“¦ [Saheb Paper ERP] Starting Nightly Database Backup...`);
+  console.log(`ðŸ“¡ Connecting to: ${SUPABASE_URL}`);
 
   const backupData = {
     metadata: {
@@ -74,9 +74,9 @@ async function runBackup() {
       } else {
         backupData.tables[table] = rows;
       }
-      console.log(`  ✓ Table '${table}': ${Array.isArray(rows) ? rows.length : 0} records fetched`);
+      console.log(`  âœ“ Table '${table}': ${Array.isArray(rows) ? rows.length : 0} records fetched`);
     } catch (err) {
-      console.error(`  ✗ Error fetching '${table}':`, err.message);
+      console.error(`  âœ— Error fetching '${table}':`, err.message);
       backupData.tables[table] = [];
     }
   }
@@ -90,10 +90,11 @@ async function runBackup() {
   const filePath = path.join(backupDir, `saheb_paper_backup_${dateStr}.json`);
   fs.writeFileSync(filePath, JSON.stringify(backupData, null, 2), 'utf-8');
 
-  console.log(`\n✅ Backup successfully generated: ${filePath}`);
+  console.log(`\nâœ… Backup successfully generated: ${filePath}`);
 }
 
 runBackup().catch(err => {
   console.error('Fatal backup error:', err);
   process.exit(1);
 });
+
